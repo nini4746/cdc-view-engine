@@ -96,3 +96,21 @@ services:
       interval: 10s
       timeout: 10s
       retries: 30
+
+  simulator:
+    build:
+      context: .
+      dockerfile: simulator/Dockerfile
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: demo
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      SIM_RATE: ${SIM_RATE:-100}
+      SIM_SELLERS: ${SIM_SELLERS:-100}
+      SIM_SEED: ${SIM_SEED:-}
+      SIM_DURATION: ${SIM_DURATION:-0}
+    depends_on:
+      engine:
+        condition: service_healthy

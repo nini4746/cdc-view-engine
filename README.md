@@ -42,16 +42,21 @@ Spring Boot, Kafka Streams, Debezium, PostgreSQL
 3. 재현 가능한 데모
 4. 검증 수치화: 정합성 검증 테스트 규모, 처리량 벤치
 
-## 실행
+## 데모 (명령어 3개)
 
 ```bash
-# 전체 스택 기동 (postgres + kafka + connect + engine)
+# 1) 전체 스택 기동 (postgres + kafka + connect + engine + simulator)
 docker compose up -d --build
 
-# 상태 확인
-docker compose ps
-curl -f http://localhost:8080/actuator/health
+# 2) 판매자 대시보드 뷰 조회 (시뮬레이터가 채운 실데이터)
+curl -s http://localhost:8080/views/seller-dashboard/1 | jq
+
+# 3) 정리
+docker compose down -v
 ```
+
+시뮬레이터 속도 조절: `SIM_RATE=500 docker compose up -d --build`.
+데모 자동 검증: `bash scripts/demo-check.sh` (5분 타임아웃).
 
 로컬 빌드/테스트 (Java 21 필요):
 
