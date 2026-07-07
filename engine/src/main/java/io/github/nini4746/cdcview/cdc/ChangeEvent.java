@@ -1,5 +1,6 @@
 package io.github.nini4746.cdcview.cdc;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import java.util.Map;
 
 /**
@@ -34,11 +35,13 @@ public record ChangeEvent(
         }
     }
 
+    @JsonIgnore
     public boolean isDelete() {
         return op == Op.DELETE;
     }
 
     /** 집계에 반영할 최신 이미지: DELETE면 before, 그 외 after. */
+    @JsonIgnore
     public Map<String, Object> effectiveImage() {
         return op == Op.DELETE ? before : after;
     }

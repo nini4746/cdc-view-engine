@@ -1,0 +1,11 @@
+name: win
+sources:
+  - table: orders
+group_by: seller_id
+window:
+  type: tumbling
+  size: 1s
+  grace: 0s
+aggregations:
+  - function: count
+    as: cnt
