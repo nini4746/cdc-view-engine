@@ -1,0 +1,21 @@
+# 판매자 매출 슬라이딩 윈도우: 최근 10분 매출/주문수를 1분마다 갱신.
+name: seller-sales-window
+description: 판매자별 최근 10분 매출과 주문수 (sliding window)
+
+sources:
+  - table: orders
+
+group_by: seller_id
+
+window:
+  type: sliding
+  size: 10m
+  advance: 1m
+  grace: 30s
+
+aggregations:
+  - function: count
+    as: order_count
+  - function: sum
+    column: amount
+    as: total_order_amount

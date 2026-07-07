@@ -1,0 +1,7 @@
+name: dup-view
+sources:
+  - table: orders
+group_by: seller_id
+aggregations:
+  - function: count
+    as: cnt

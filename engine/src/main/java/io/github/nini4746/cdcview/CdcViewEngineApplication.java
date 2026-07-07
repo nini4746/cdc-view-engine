@@ -3,6 +3,7 @@ package io.github.nini4746.cdcview;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
+import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
 
 /**
  * CDC 실시간 구체화 뷰 엔진 진입점.
@@ -12,6 +13,7 @@ import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
  */
 // DataSource는 cdcview.postgres 설정에서 직접 구성하므로 자동설정을 제외한다.
 @SpringBootApplication(exclude = DataSourceAutoConfiguration.class)
+@ConfigurationPropertiesScan
 public class CdcViewEngineApplication {
 
     public static void main(String[] args) {

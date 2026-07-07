@@ -1,0 +1,11 @@
+name: sliding-no-advance
+sources:
+  - table: orders
+group_by: seller_id
+window:
+  type: sliding
+  size: 10m
+  # advance 누락 → 실패해야 한다
+aggregations:
+  - function: count
+    as: cnt

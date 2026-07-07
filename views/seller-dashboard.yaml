@@ -1,0 +1,30 @@
+# 판매자 대시보드: 주문 + 재고 + 정산을 seller_id로 조인·집계한 비윈도우 뷰.
+name: seller-dashboard
+description: 판매자별 주문/정산 누적과 최소 재고를 실시간 집계
+
+sources:
+  - table: orders
+    join_key: seller_id
+  - table: inventory
+    join_key: seller_id
+  - table: settlements
+    join_key: seller_id
+
+group_by: seller_id
+
+aggregations:
+  - function: sum
+    source: orders
+    column: amount
+    as: total_order_amount
+  - function: count
+    source: orders
+    as: order_count
+  - function: sum
+    source: settlements
+    column: settled_amount
+    as: total_settled_amount
+  - function: min
+    source: inventory
+    column: quantity
+    as: min_inventory

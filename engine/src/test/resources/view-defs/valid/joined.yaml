@@ -1,0 +1,19 @@
+name: valid-joined
+sources:
+  - table: orders
+    join_key: seller_id
+  - table: settlements
+    join_key: seller_id
+group_by: seller_id
+window:
+  type: tumbling
+  size: 5m
+  grace: 30s
+aggregations:
+  - function: sum
+    source: orders
+    column: amount
+    as: total_amount
+  - function: count
+    source: orders
+    as: cnt

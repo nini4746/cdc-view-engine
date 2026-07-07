@@ -1,0 +1,8 @@
+name: dup-view
+sources:
+  - table: settlements
+group_by: seller_id
+aggregations:
+  - function: sum
+    column: settled_amount
+    as: total

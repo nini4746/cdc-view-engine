@@ -1,0 +1,7 @@
+# group_by 누락
+name: missing-group
+sources:
+  - table: orders
+aggregations:
+  - function: count
+    as: cnt
