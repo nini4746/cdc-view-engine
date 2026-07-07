@@ -17,7 +17,9 @@ import org.springframework.test.context.TestPropertySource;
 @TestPropertySource(properties = {
         "cdcview.bootstrap.connectors=false",
         "cdcview.bootstrap.streams=false",
-        "cdcview.views.directory=../views"
+        "cdcview.views.directory=../views",
+        // PG 없이 컨텍스트만 검증하므로 DataSource 헬스 인디케이터 비활성
+        "management.health.db.enabled=false"
 })
 class ContextLoadTest {
 
