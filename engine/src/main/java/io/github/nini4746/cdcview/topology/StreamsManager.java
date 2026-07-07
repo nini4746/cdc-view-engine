@@ -1,5 +1,6 @@
 package io.github.nini4746.cdcview.topology;
 
+import io.github.nini4746.cdcview.api.InstanceDirectory;
 import io.github.nini4746.cdcview.config.BootstrapProperties;
 import io.github.nini4746.cdcview.config.KafkaProperties;
 import jakarta.annotation.PreDestroy;
@@ -28,15 +29,18 @@ public class StreamsManager implements ApplicationRunner {
     private final StreamsConfigFactory configFactory;
     private final KafkaProperties kafkaProps;
     private final BootstrapProperties bootstrap;
+    private final InstanceDirectory instanceDirectory;
 
     private volatile KafkaStreams streams;
 
     public StreamsManager(TopologyBuilder topologyBuilder, StreamsConfigFactory configFactory,
-                          KafkaProperties kafkaProps, BootstrapProperties bootstrap) {
+                          KafkaProperties kafkaProps, BootstrapProperties bootstrap,
+                          InstanceDirectory instanceDirectory) {
         this.topologyBuilder = topologyBuilder;
         this.configFactory = configFactory;
         this.kafkaProps = kafkaProps;
         this.bootstrap = bootstrap;
+        this.instanceDirectory = instanceDirectory;
     }
 
     @Override
@@ -54,6 +58,7 @@ public class StreamsManager implements ApplicationRunner {
         streams.setStateListener((newState, oldState) ->
                 log.info("Streams 상태 전이: {} → {}", oldState, newState));
         streams.start();
+        instanceDirectory.register(streams);
     }
 
     /** Plan 05/08 store 조회용. 미기동이면 null. */

@@ -42,6 +42,11 @@ public class ViewRegistry {
         log.info("뷰 정의 {}개 로딩 완료: {}", loaded.size(), loaded.keySet());
     }
 
+    /** 디렉토리를 다시 스캔해 뷰 정의를 갱신한다(Plan 09 재구축 시 편집된 YAML 반영). 서빙 버전 포인터는 보존. */
+    public void reload() {
+        load();
+    }
+
     public Collection<ViewDefinition> all() {
         return definitions.values();
     }
