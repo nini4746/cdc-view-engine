@@ -59,6 +59,13 @@ curl -f http://localhost:8080/actuator/health
 ./gradlew :engine:test
 ```
 
+## 검증 스크립트
+
+```bash
+# exactly-once 카오스 재시작 검증 (compose 필요): 처리 도중 kill -9 후 재시작해도 뷰 값이 기대값과 동일
+bash scripts/chaos-restart-test.sh
+```
+
 ## 참고
 
 - 레포: harshithrao07/distributed-scheduler (3★) - 장애복구 중심 서사의 모범 (Spring+Kafka+Redis 구성)
