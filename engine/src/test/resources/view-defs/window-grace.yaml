@@ -1,0 +1,14 @@
+name: wingrace
+sources:
+  - table: orders
+group_by: seller_id
+window:
+  type: tumbling
+  size: 1m
+  grace: 30s
+aggregations:
+  - function: count
+    as: cnt
+  - function: sum
+    column: amount
+    as: total

@@ -5,6 +5,8 @@ import io.github.nini4746.cdcview.cdc.ChangeEvent;
 import io.github.nini4746.cdcview.config.ConnectProperties;
 import io.github.nini4746.cdcview.config.ViewDefinition;
 import io.github.nini4746.cdcview.config.ViewRegistry;
+import io.github.nini4746.cdcview.ordering.LateEventHandler;
+import io.github.nini4746.cdcview.ordering.LsnGuard;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -36,11 +38,16 @@ public class TopologyBuilder {
     private final ViewRegistry registry;
     private final ConnectProperties connect;
     private final CdcMetrics metrics;
+    private final LsnGuard lsnGuard;
+    private final LateEventHandler lateEventHandler;
 
-    public TopologyBuilder(ViewRegistry registry, ConnectProperties connect, CdcMetrics metrics) {
+    public TopologyBuilder(ViewRegistry registry, ConnectProperties connect, CdcMetrics metrics,
+                           LsnGuard lsnGuard, LateEventHandler lateEventHandler) {
         this.registry = registry;
         this.connect = connect;
         this.metrics = metrics;
+        this.lsnGuard = lsnGuard;
+        this.lateEventHandler = lateEventHandler;
     }
 
     public void build(StreamsBuilder builder) {
@@ -64,7 +71,9 @@ public class TopologyBuilder {
                     .stream(topic, Consumed.with(Serdes.String(), sourceSerde)
                             .withTimestampExtractor(new EventTimeExtractor()))
                     .filter((k, ev) -> ev != null)
-                    .peek((k, ev) -> metrics.recordReceived(ev.table()))
+                    .peek((k, ev) -> metrics.recordReceived(ev.table()));
+            // 소스 PK 키 유지 상태로 LSN 가드 적용(stale/중복 폐기) 후 그룹 키로 리키잉
+            s = lsnGuard.apply(s, def.getName(), src.getTable())
                     .selectKey((k, ev) -> groupKey(ev, keyCol));
             perSource.add(s);
         }
@@ -74,7 +83,11 @@ public class TopologyBuilder {
             merged = merged.merge(perSource.get(i));
         }
 
-        // Plan 06에서 이 지점에 LSN 가드(stale/중복 폐기) + grace 초과 지각 이벤트 DLQ가 삽입된다.
+        // 윈도우 뷰: grace 초과 지각 이벤트를 DLQ로 보내고 정시 이벤트만 집계
+        if (def.isWindowed()) {
+            merged = lateEventHandler.apply(merged, def);
+        }
+
         KGroupedStream<String, ChangeEvent> grouped =
                 merged.groupByKey(Grouped.with(Serdes.String(), jsonSerde));
 

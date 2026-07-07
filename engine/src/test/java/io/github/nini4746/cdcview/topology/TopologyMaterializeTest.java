@@ -10,6 +10,9 @@ import io.github.nini4746.cdcview.cdc.CdcMetrics;
 import io.github.nini4746.cdcview.config.ConnectProperties;
 import io.github.nini4746.cdcview.config.ViewDefinition;
 import io.github.nini4746.cdcview.config.ViewDefinitionLoader;
+import io.github.nini4746.cdcview.ordering.LateEventHandler;
+import io.github.nini4746.cdcview.ordering.LsnGuard;
+import io.github.nini4746.cdcview.ordering.OrderingMetrics;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.nio.file.Path;
 import java.time.Instant;
@@ -29,8 +32,10 @@ import org.junit.jupiter.api.Test;
 class TopologyMaterializeTest {
 
     private final ViewDefinitionLoader loader = new ViewDefinitionLoader();
-    private final TopologyBuilder topologyBuilder =
-            new TopologyBuilder(null, new ConnectProperties(), new CdcMetrics(new SimpleMeterRegistry()));
+    private final OrderingMetrics orderingMetrics = new OrderingMetrics(new SimpleMeterRegistry());
+    private final TopologyBuilder topologyBuilder = new TopologyBuilder(
+            null, new ConnectProperties(), new CdcMetrics(new SimpleMeterRegistry()),
+            new LsnGuard(orderingMetrics), new LateEventHandler(orderingMetrics));
     private TopologyTestDriver driver;
 
     @AfterEach
