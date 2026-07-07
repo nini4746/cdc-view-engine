@@ -69,6 +69,12 @@ docker compose down -v
 ```bash
 # exactly-once 카오스 재시작 검증 (compose 필요): 처리 도중 kill -9 후 재시작해도 뷰 값이 기대값과 동일
 bash scripts/chaos-restart-test.sh
+
+# 정합성 검증: 소스 스냅샷 기대값 vs 서빙 뷰 비교
+curl -X POST http://localhost:8080/admin/verify/seller-dashboard | jq
+
+# 벤치마크: 10,000 events/sec, 10분, p95 <= 1초 판정 → bench/reports/ 에 리포트 생성
+bash bench/run-bench.sh
 ```
 
 ## 참고

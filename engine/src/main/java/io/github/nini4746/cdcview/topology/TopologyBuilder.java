@@ -91,17 +91,23 @@ public class TopologyBuilder {
         KGroupedStream<String, ChangeEvent> grouped =
                 merged.groupByKey(Grouped.with(Serdes.String(), jsonSerde));
 
+        // 집계 반영 시 커밋 대비 지연 히스토그램 기록(Plan 11 벤치 기준점: PG 커밋 시각)
+        org.apache.kafka.streams.kstream.Aggregator<String, ChangeEvent, AggregateState> aggregator =
+                (key, ev, agg) -> {
+                    AggregateState s = agg.apply(ev, def);
+                    metrics.recordApplyLatency(def.getName(), System.currentTimeMillis() - ev.tsMs());
+                    return s;
+                };
+
         if (def.isWindowed()) {
             TimeWindows windows = timeWindows(def.getWindow());
             grouped.windowedBy(windows)
-                    .aggregate(AggregateState::new,
-                            (key, ev, agg) -> agg.apply(ev, def),
+                    .aggregate(AggregateState::new, aggregator,
                             Materialized.<String, AggregateState, WindowStore<Bytes, byte[]>>as(storeName)
                                     .withKeySerde(Serdes.String())
                                     .withValueSerde(stateSerde));
         } else {
-            grouped.aggregate(AggregateState::new,
-                    (key, ev, agg) -> agg.apply(ev, def),
+            grouped.aggregate(AggregateState::new, aggregator,
                     Materialized.<String, AggregateState, KeyValueStore<Bytes, byte[]>>as(storeName)
                             .withKeySerde(Serdes.String())
                             .withValueSerde(stateSerde));
