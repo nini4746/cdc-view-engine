@@ -1,0 +1,52 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: cdc-view-engine
+
+# 모든 외부 접속 정보는 환경변수로 오버라이드 가능 (docker compose에서 주입)
+cdcview:
+  views:
+    # 뷰 정의 YAML 디렉토리. 로컬 실행은 저장소 루트 views/, 컨테이너는 /app/views 마운트
+    directory: ${CDCVIEW_VIEWS_DIR:views}
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    application-id: ${KAFKA_APPLICATION_ID:cdc-view-engine}
+    state-dir: ${KAFKA_STATE_DIR:./data/kafka-streams}
+  connect:
+    url: ${CONNECT_URL:http://localhost:8083}
+    connector-name: ${CONNECT_CONNECTOR_NAME:cdcview-postgres}
+    topic-prefix: ${CONNECT_TOPIC_PREFIX:cdcview}
+  postgres:
+    host: ${POSTGRES_HOST:localhost}
+    port: ${POSTGRES_PORT:5432}
+    database: ${POSTGRES_DB:demo}
+    username: ${POSTGRES_USER:app}
+    password: ${POSTGRES_PASSWORD:app}
+    # Debezium이 접속할 때 쓰는 호스트/포트 (compose 네트워크 내부명)
+    cdc-host: ${POSTGRES_CDC_HOST:${POSTGRES_HOST:localhost}}
+    cdc-port: ${POSTGRES_CDC_PORT:${POSTGRES_PORT:5432}}
+  # 부팅 시 Debezium 커넥터 자동 등록/토폴로지 기동 여부. 단위 테스트에서는 false
+  bootstrap:
+    connectors: ${CDCVIEW_BOOTSTRAP_CONNECTORS:true}
+    streams: ${CDCVIEW_BOOTSTRAP_STREAMS:true}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    distribution:
+      percentiles-histogram:
+        view.apply.latency: true
+      percentiles:
+        view.apply.latency: 0.5, 0.95, 0.99
+
+logging:
+  level:
+    io.github.nini4746.cdcview: INFO
