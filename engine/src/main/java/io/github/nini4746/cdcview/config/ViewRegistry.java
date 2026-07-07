@@ -34,7 +34,7 @@ public class ViewRegistry {
     }
 
     @PostConstruct
-    void load() {
+    public void load() {
         Path dir = Path.of(properties.getDirectory());
         Map<String, ViewDefinition> loaded = loader.loadDirectory(dir);
         this.definitions = loaded;
