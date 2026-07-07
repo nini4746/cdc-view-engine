@@ -5,6 +5,8 @@ import javax.sql.DataSource;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.transaction.PlatformTransactionManager;
 
 /**
  * cdcview.postgres 설정으로 소스 PG DataSource를 직접 구성한다(자동설정 제외).
@@ -29,5 +31,10 @@ public class DataSourceConfig {
     @Bean
     public JdbcTemplate sourceJdbcTemplate(DataSource sourceDataSource) {
         return new JdbcTemplate(sourceDataSource);
+    }
+
+    @Bean
+    public PlatformTransactionManager sourceTransactionManager(DataSource sourceDataSource) {
+        return new DataSourceTransactionManager(sourceDataSource);
     }
 }

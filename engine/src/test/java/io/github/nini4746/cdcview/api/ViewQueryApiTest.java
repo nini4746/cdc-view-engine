@@ -139,5 +139,10 @@ class ViewQueryApiTest {
                 String storeName, String key, long fromMs, long toMs) {
             return windows.getOrDefault(storeName, Map.of()).getOrDefault(key, List.of());
         }
+
+        @Override
+        public List<Map.Entry<String, AggregateState>> scanAll(String storeName) {
+            return new java.util.ArrayList<>(latest.getOrDefault(storeName, Map.of()).entrySet());
+        }
     }
 }

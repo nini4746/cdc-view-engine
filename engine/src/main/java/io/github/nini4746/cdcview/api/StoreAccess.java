@@ -21,4 +21,7 @@ public interface StoreAccess {
      * 각 엔트리 키는 윈도우 시작 시각(epoch ms).
      */
     List<Map.Entry<Long, AggregateState>> windowFetch(String storeName, String key, long fromMs, long toMs);
+
+    /** 비윈도우 store 전체 스캔(정합성 검증용, read-only). */
+    List<Map.Entry<String, AggregateState>> scanAll(String storeName);
 }

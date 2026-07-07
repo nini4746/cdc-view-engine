@@ -65,6 +65,25 @@ public class KafkaStreamsStoreAccess implements StoreAccess {
         }
     }
 
+    @Override
+    public List<Map.Entry<String, AggregateState>> scanAll(String storeName) {
+        KafkaStreams streams = requireStreams();
+        try {
+            ReadOnlyKeyValueStore<String, AggregateState> store = streams.store(
+                    StoreQueryParameters.fromNameAndType(storeName, QueryableStoreTypes.keyValueStore()));
+            List<Map.Entry<String, AggregateState>> out = new ArrayList<>();
+            try (var it = store.all()) {
+                while (it.hasNext()) {
+                    var kv = it.next();
+                    out.add(new AbstractMap.SimpleImmutableEntry<>(kv.key, kv.value));
+                }
+            }
+            return out;
+        } catch (InvalidStateStoreException e) {
+            throw new StreamsNotReadyException("store 준비 안 됨: " + storeName, e);
+        }
+    }
+
     private KafkaStreams requireStreams() {
         KafkaStreams streams = streamsManager.streams();
         if (streams == null || !streamsManager.isRunning()) {
