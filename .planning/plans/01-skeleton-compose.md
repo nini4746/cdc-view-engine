@@ -35,8 +35,8 @@ Spring Boot 프로젝트 골격과 docker compose 인프라 (PG + Kafka + Kafka 
 
 ## 검증
 
-- [ ] AC10-1: `docker compose up -d` 후 `docker compose ps` 에서 postgres, kafka, connect, engine 모두 healthy
-- [ ] AC10-2: `curl -f http://localhost:8080/actuator/health` 가 200 반환
+- [x] AC10-1: `docker compose up -d` 후 `docker compose ps` 에서 postgres, kafka, connect, engine 모두 healthy - 2026-07-07 V1 실측: compose up +34초에 4개 서비스 전부 healthy (.planning/v1-demo-verification.md)
+- [x] AC10-2: `curl -f http://localhost:8080/actuator/health` 가 200 반환 - 2026-07-07 V1 실측: +34초에 HTTP 200, status UP (검증 환경은 호스트 8080을 외부 프로세스가 점유해 호스트 포트만 18080으로 우회, 컨테이너 구성 동일)
 - 보조 확인 (SPEC 외): `docker exec` 로 PG 접속해 `SHOW wal_level` = logical, 3테이블 존재 확인
 
 테스트 명령어:

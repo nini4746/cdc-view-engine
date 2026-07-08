@@ -38,7 +38,8 @@ public final class Simulator {
     private Simulator() {
         this.rate = envInt("SIM_RATE", 100);
         this.sellers = envInt("SIM_SELLERS", 100);
-        long seed = System.getenv("SIM_SEED") != null ? Long.parseLong(System.getenv("SIM_SEED")) : System.nanoTime();
+        String seedEnv = env("SIM_SEED", null);
+        long seed = seedEnv != null ? Long.parseLong(seedEnv) : System.nanoTime();
         this.random = new Random(seed);
         long durSec = envInt("SIM_DURATION", 0);
         this.durationMs = durSec <= 0 ? Long.MAX_VALUE : durSec * 1000L;
@@ -234,13 +235,14 @@ public final class Simulator {
                 + env("POSTGRES_PORT", "5432") + "/" + env("POSTGRES_DB", "demo");
     }
 
+    /** 빈 문자열은 미설정으로 취급한다 (compose의 `${VAR:-}` 는 빈 값을 넘긴다). */
     private static String env(String key, String def) {
         String v = System.getenv(key);
-        return v == null ? def : v;
+        return v == null || v.isBlank() ? def : v;
     }
 
     private static int envInt(String key, int def) {
-        String v = System.getenv(key);
+        String v = env(key, null);
         return v == null ? def : Integer.parseInt(v);
     }
 }
