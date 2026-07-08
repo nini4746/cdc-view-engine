@@ -16,6 +16,8 @@ public class ConnectProperties {
     private int pollIntervalMs = 10;
     /** Debezium max.batch.size. 낮추면 부분 배치를 더 빨리 방출(지연↓, 처리량 트레이드오프). */
     private int maxBatchSize = 256;
+    /** CDC 소스 토픽 파티션 수 (T2 처리량 스케일링). Streams repartition/changelog도 이 수를 따른다. */
+    private int sourcePartitions = 8;
 
     public String getUrl() {
         return url;
@@ -71,6 +73,14 @@ public class ConnectProperties {
 
     public void setMaxBatchSize(int maxBatchSize) {
         this.maxBatchSize = maxBatchSize;
+    }
+
+    public int getSourcePartitions() {
+        return sourcePartitions;
+    }
+
+    public void setSourcePartitions(int sourcePartitions) {
+        this.sourcePartitions = sourcePartitions;
     }
 
     /** 테이블(public.orders)에 대응하는 CDC 토픽명. */

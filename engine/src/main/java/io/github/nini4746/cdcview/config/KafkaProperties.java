@@ -11,6 +11,8 @@ public class KafkaProperties {
     private String stateDir = "./data/kafka-streams";
     /** Kafka Streams commit.interval.ms. EOS 처리량 대비 지연 트레이드오프 (T1 실험용). */
     private int commitIntervalMs = 100;
+    /** Kafka Streams num.stream.threads. 처리량 병렬성 (T2). 파티션 수 이하에서만 유효. */
+    private int streamThreads = 8;
 
     public String getBootstrapServers() {
         return bootstrapServers;
@@ -42,5 +44,13 @@ public class KafkaProperties {
 
     public void setCommitIntervalMs(int commitIntervalMs) {
         this.commitIntervalMs = commitIntervalMs;
+    }
+
+    public int getStreamThreads() {
+        return streamThreads;
+    }
+
+    public void setStreamThreads(int streamThreads) {
+        this.streamThreads = streamThreads;
     }
 }

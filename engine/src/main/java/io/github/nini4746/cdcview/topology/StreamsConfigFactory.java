@@ -33,7 +33,8 @@ public class StreamsConfigFactory {
         p.put(StreamsConfig.REPLICATION_FACTOR_CONFIG, 1);
         // commit.interval.ms (T1 실험용 env 조절 가능, 기본 100ms). EOS 처리량 대비 지연 균형.
         p.put(StreamsConfig.COMMIT_INTERVAL_MS_CONFIG, kafka.getCommitIntervalMs());
-        p.put(StreamsConfig.NUM_STREAM_THREADS_CONFIG, 1);
+        // num.stream.threads (T2 처리량 스케일링, env 조절). 파티션 수 이하에서만 유효.
+        p.put(StreamsConfig.NUM_STREAM_THREADS_CONFIG, kafka.getStreamThreads());
         // Debezium 초기 스냅샷(op=r) 포함 전체 히스토리를 읽어 상태를 구축(재구축 섀도도 동일)
         p.put(StreamsConfig.consumerPrefix(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG), "earliest");
         return p;

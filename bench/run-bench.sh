@@ -15,8 +15,14 @@ DURATION_SEC="${DURATION_SEC:-600}"     # 측정 10분
 WARMUP_SEC="${WARMUP_SEC:-60}"          # 워밍업 제외
 SCRAPE_INTERVAL="${SCRAPE_INTERVAL:-15}"
 VIEW="${VIEW:-seller-dashboard}"
-REST="http://localhost:8080"
+REST="${REST:-http://localhost:8080}"
 P95_TARGET_MS=1000
+
+# T2: 10,000/s 재현 config. compose 기본값이 8파티션/8스레드이므로 여기선 부하 평활화만 설정.
+# 고rate에서 시뮬레이터 deficit 버스트를 줄여 lag 스파이크를 낮춘다(균일 부하).
+export SIM_MAX_BATCH="${SIM_MAX_BATCH:-150}"
+export CONNECT_SOURCE_PARTITIONS="${CONNECT_SOURCE_PARTITIONS:-8}"
+export KAFKA_STREAM_THREADS="${KAFKA_STREAM_THREADS:-8}"
 
 mkdir -p bench/reports
 ts=$(date +%Y%m%d-%H%M%S)
@@ -81,10 +87,11 @@ while (( elapsed < DURATION_SEC )); do
   p50=$(percentile_ms "$bstart" "$bend" 0.5)
   p95=$(percentile_ms "$bstart" "$bend" 0.95)
   p99=$(percentile_ms "$bstart" "$bend" 0.99)
-  # 구간 내 순시 lag(백로그) 관측 - 정상상태 판별용
-  lag=$(timeout 20 docker compose exec -T kafka /opt/kafka/bin/kafka-consumer-groups.sh \
+  # 구간 내 순시 lag(백로그) 관측 - 정상상태 판별용. 고부하 시 describe가 지연될 수 있어
+  # non-fatal 처리 (timeout/실패해도 벤치 중단 금지, set -e 방어).
+  lag=$( { timeout 25 docker compose exec -T kafka /opt/kafka/bin/kafka-consumer-groups.sh \
         --bootstrap-server localhost:9092 --describe --group cdc-view-engine 2>/dev/null \
-        | awk '$6 ~ /^[0-9]+$/ {s+=$6} END{printf "%.0f", s+0}')
+        | awk '$6 ~ /^[0-9]+$/ {s+=$6} END{printf "%.0f", s+0}'; } || echo "?")
   log "  t=${elapsed}s p50=${p50:-?}ms p95=${p95:-?}ms p99=${p99:-?}ms lag=${lag:-?}"
 done
 snapshot_buckets "$bend"
@@ -153,9 +160,10 @@ cat > "$report" <<EOF
 
 ## 튜닝 파라미터 (재현성)
 
-- Kafka Streams: processing.guarantee=exactly_once_v2, commit.interval.ms=100, num.stream.threads=1
-- auto.offset.reset=earliest, replication.factor=1
-- Debezium: decimal.handling.mode=double, tombstones.on.delete=false
+- Kafka Streams: processing.guarantee=exactly_once_v2, commit.interval.ms=${KAFKA_COMMIT_INTERVAL_MS:-100}, num.stream.threads=${KAFKA_STREAM_THREADS:-8} (T2)
+- 소스 토픽 파티션: ${CONNECT_SOURCE_PARTITIONS:-8} (T2), replication.factor=1, auto.offset.reset=earliest
+- Debezium(T1): poll.interval.ms=${CONNECT_POLL_INTERVAL_MS:-10}, max.batch.size=${CONNECT_MAX_BATCH_SIZE:-256}, decimal.handling.mode=double, tombstones.on.delete=false
+- 시뮬레이터 부하 평활화: SIM_MAX_BATCH=${SIM_MAX_BATCH:-500}
 - RocksDB: 기본값
 
 ## 재현 명령어

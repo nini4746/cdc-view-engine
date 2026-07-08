@@ -85,6 +85,8 @@ services:
       CONNECT_POLL_INTERVAL_MS: ${CONNECT_POLL_INTERVAL_MS:-10}
       CONNECT_MAX_BATCH_SIZE: ${CONNECT_MAX_BATCH_SIZE:-256}
       KAFKA_COMMIT_INTERVAL_MS: ${KAFKA_COMMIT_INTERVAL_MS:-100}
+      CONNECT_SOURCE_PARTITIONS: ${CONNECT_SOURCE_PARTITIONS:-8}
+      KAFKA_STREAM_THREADS: ${KAFKA_STREAM_THREADS:-8}
     volumes:
       - ./views:/app/views:ro
     depends_on:
@@ -114,6 +116,7 @@ services:
       SIM_SELLERS: ${SIM_SELLERS:-100}
       SIM_SEED: ${SIM_SEED:-}
       SIM_DURATION: ${SIM_DURATION:-0}
+      SIM_MAX_BATCH: ${SIM_MAX_BATCH:-500}
     depends_on:
       engine:
         condition: service_healthy

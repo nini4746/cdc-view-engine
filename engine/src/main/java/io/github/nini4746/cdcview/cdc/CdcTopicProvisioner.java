@@ -38,7 +38,6 @@ public class CdcTopicProvisioner implements ApplicationRunner {
 
     private static final Logger log = LoggerFactory.getLogger(CdcTopicProvisioner.class);
 
-    static final int PARTITIONS = 1;
     static final short REPLICATION_FACTOR = 1;
     private static final long TIMEOUT_SECONDS = 30;
 
@@ -83,11 +82,12 @@ public class CdcTopicProvisioner implements ApplicationRunner {
 
     /** 부재 토픽만 생성. 이미 존재(경합 포함)는 성공으로 취급한다 (멱등). 그 외 실패는 부팅 중단. */
     void ensureTopics(Admin admin, List<String> topics) {
+        int partitions = connect.getSourcePartitions();
         try {
             Set<String> existing = admin.listTopics().names().get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
             List<NewTopic> missing = topics.stream()
                     .filter(t -> !existing.contains(t))
-                    .map(t -> new NewTopic(t, PARTITIONS, REPLICATION_FACTOR))
+                    .map(t -> new NewTopic(t, partitions, REPLICATION_FACTOR))
                     .toList();
             if (missing.isEmpty()) {
                 log.info("CDC 토픽 전부 존재: {}", topics);
@@ -99,7 +99,7 @@ public class CdcTopicProvisioner implements ApplicationRunner {
                 try {
                     result.values().get(topic.name()).get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
                     log.info("CDC 토픽 선생성: {} (partitions={}, rf={})",
-                            topic.name(), PARTITIONS, REPLICATION_FACTOR);
+                            topic.name(), partitions, REPLICATION_FACTOR);
                 } catch (ExecutionException e) {
                     if (e.getCause() instanceof TopicExistsException) {
                         log.info("CDC 토픽 이미 존재 (경합): {}", topic.name());

@@ -32,7 +32,7 @@ DB 커밋 → 뷰 반영 지연 분포를 측정하는 벤치 하네스를 만�
 ## 검증
 
 - [x] AC9-1: 벤치 하네스가 커밋 ts_ms 대비 뷰 반영 시각으로 지연 분포 (p50/p95/p99) 를 산출해 리포트 파일을 생성한다 - 2026-07-08 V3 실측: bench/reports/*.md 생성, p50/p95/p99 산출 (워밍업 제외 히스토그램 델타). 단 하네스 결함 2건 수정 (percentile 파싱, 워밍업 미제외) - .planning/v3-benchmark-verification.md
-- [ ] AC9-2: 10,000 events/sec, 10분 지속, 워밍업 60초 제외 조건에서 p95 ≤ 1,000ms (run-bench.sh exit 0) - **미달 (10,000/s 처리량 한계, 정직 기록)**. V3(2026-07-08): 지연 바닥 p50 716ms로 rate 무관 미달. **T1(Plan 15)에서 지연 바닥 해소** - Debezium poll.interval.ms 500→10, max.batch.size 2048→256으로 지속가능 rate에서 p95 179ms(1,000/s)~537ms(2,000/s) 달성(≤1s). 그러나 10,000/s는 T1 후에도 p95 >30s, lag 831k 단조증가 → 사유가 지연에서 **처리량 포화만 남음**. 남은 과제 T2(스레드/파티션↑ 또는 멀티노드, SPEC 범위 외). 상세: .planning/t1-latency-tuning-verification.md
+- [x] AC9-2: 10,000 events/sec, 10분 지속, 워밍업 60초 제외 조건에서 p95 ≤ 1,000ms (run-bench.sh exit 0) - **달성 (2026-07-08, T1+T2 후)**. V3: 지연 바닥+처리량 이중 미달. T1(Plan 15): Debezium poll.interval.ms 500→10로 지연 바닥 해소. **T2(Plan 16): 소스 파티션 1→8 + num.stream.threads 1→8로 처리량 포화 해소.** 최종 10분 지속 실측: 10,000/s, 워밍업 60초 제외, **p50=134ms, p95=537ms, p99=1432ms, lag bounded(0~12k 배수), DLQ 0, exit 0** (bench/reports/20260708-122749.md). 정합성 mismatch 0/100, EOS 멀티파티션 무결(chaos PASS). 상세: .planning/t2-throughput-scaling-verification.md
 - [x] AC9-3: 리포트에 실행 하드웨어 사양 (CPU, 메모리, docker 리소스 한도) 이 기록된다 - 2026-07-08 실측: 호스트 8 CPU/16GB, Docker 8 NCPU/~7.75GB 리포트 자동 기록
 - [x] AC9-4: 부하 중 처리 실패와 DLQ 오적재 0건 (리포트의 failure/DLQ 카운트로 확인) - 2026-07-08 실측: 전 rate 구간 late/DLQ 0건 (의도 주입 없음)
 

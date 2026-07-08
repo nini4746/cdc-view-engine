@@ -69,7 +69,8 @@ class CdcTopicProvisionerTest {
         assertThat(captor.getValue()).hasSize(1);
         NewTopic created = captor.getValue().iterator().next();
         assertThat(created.name()).isEqualTo("cdcview.public.inventory");
-        assertThat(created.numPartitions()).isEqualTo(1);
+        // T2: 소스 파티션 기본값 8 (처리량 스케일링, 10,000/s 달성 config)
+        assertThat(created.numPartitions()).isEqualTo(8);
         assertThat(created.replicationFactor()).isEqualTo((short) 1);
     }
 
