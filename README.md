@@ -78,20 +78,25 @@ bash bench/run-bench.sh                          # 기본 SIM_RATE=10000, DURATI
 SIM_RATE=1000 DURATION_SEC=300 bash bench/run-bench.sh
 ```
 
-## 벤치 실측 (V3, 2026-07-08)
+## 벤치 실측 (V3 → T1 튜닝, 2026-07-08)
 
-측정 환경: 단일 호스트 docker (macOS, 8 CPU / 16GB, Docker 8 NCPU / ~7.75GB). postgres·kafka·connect·engine·simulator 전부 동일 호스트 공유. 지연 = Debezium 커밋 ts_ms 대비 엔진 뷰 반영 시각(`view.apply.latency` percentile histogram, 워밍업 제외 윈도우 델타). 파라미터: EOS v2, commit.interval.ms=100, num.stream.threads=1, RocksDB 기본, Debezium poll.interval 기본.
+측정 환경: 단일 호스트 docker (macOS, 8 CPU / 16GB, Docker 8 NCPU / ~7.75GB). postgres·kafka·connect·engine·simulator 전부 동일 호스트 공유. 지연 = Debezium 커밋 ts_ms 대비 엔진 뷰 반영 시각(`view.apply.latency` percentile histogram, 워밍업 제외 윈도우 델타). Kafka Streams EOS v2, num.stream.threads=1, RocksDB 기본.
 
-| SIM_RATE | p50 | p95 | p99 | lag(백로그) | 판정 |
-|---|---|---|---|---|---|
-| 10,000/s | >30s | >30s | >30s | 213k까지 폭증 후 배수 | FAIL (처리량 포화) |
-| 2,000/s | 716ms | 1074ms | 1432ms | bounded (0~2.4k) | 지연 미달 (처리량은 지속가능) |
-| 1,000/s (5분) | 716ms | ~1074ms | 1432ms | bounded (0~1.4k) | 지연 미달 (경계) |
+V3에서 p50가 rate 무관 716ms로 고정된 원인은 **Debezium `poll.interval.ms`(기본 500ms)의 배치 누적 대기**였다. T1에서 `poll.interval.ms` 500→10, `max.batch.size` 2048→256으로 낮춰 지연 바닥을 제거했다(기본값 반영).
+
+| SIM_RATE | 설정 | p50 | p95 | p99 | lag | 판정 |
+|---|---|---|---|---|---|---|
+| 1,000/s | poll=500 (V3 baseline) | 716ms | 1074ms | 1432ms | bounded | 지연 미달 |
+| 1,000/s | **poll=10, batch=256** | 112ms | **179ms** | 358ms | bounded | **PASS** |
+| 2,000/s (5분) | **poll=10, batch=256** | 112ms | **537ms** | 2505ms | bounded 0~0.9k | **PASS** |
+| 10,000/s | poll=10, batch=256 | >30s | >30s | >30s | 831k 단조증가 | FAIL (처리량 포화) |
+
+기여도 분리: `poll.interval.ms` 단독(500→10)이 지배적(1,000/s p95 1074→~537ms), `max.batch.size`=256이 tail 추가 개선(p95→179, p99→358). 정합성(quiesce 후 mismatch 0/100, verdict pass)·EOS·DLQ(0건) 회귀 없음.
 
 정직한 결론:
-- **목표 (10,000 events/sec, p95 ≤ 1s) 는 이 하드웨어에서 미달.** 10,000/s에서는 처리량이 포화되어 백로그가 무한 증가(p95 >30s). 8코어를 5개 컨테이너가 공유 + Kafka Streams 단일 스레드 + EOS v2 조합의 단일 노드 한계.
-- 처리량 자체는 ~2,000/s까지 lag가 bounded(지속 가능). 그러나 **p95 ≤ 1s 는 rate와 무관하게 미달**: p50가 rate 1,000~2,000/s에서 716ms로 고정 → 백로그가 아닌 **파이프라인 고정 지연 바닥**이 병목. 가장 유력한 원인은 Debezium `poll.interval.ms`(기본 500ms) + commit.interval.ms(100ms) (미검증 가설, 후속 튜닝 plan 대상). DLQ/처리 실패는 전 구간 0건.
-- 상세·재현: `.planning/v3-benchmark-verification.md`, `bench/reports/`.
+- **지연 목표(p95 ≤ 1s)는 지속가능 rate(1,000~2,000/s)에서 달성**(p95 179~537ms). V3의 지연 바닥 병목 해소.
+- **목표 rate 10,000/s는 여전히 미달**: 이제 사유는 지연이 아니라 **처리량 포화**뿐. 10,000/s에서 lag가 831k까지 단조 증가. 8코어 5컨테이너 공유 + Streams 단일 스레드 + EOS v2 단일 노드 한계. 남은 과제는 T2(스레드/파티션 증대 또는 멀티노드, SPEC 범위 외).
+- 상세·재현: `.planning/v3-benchmark-verification.md`, `.planning/t1-latency-tuning-verification.md`, `bench/reports/`.
 
 ## 참고
 

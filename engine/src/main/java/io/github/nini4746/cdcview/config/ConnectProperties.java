@@ -12,6 +12,10 @@ public class ConnectProperties {
     private String topicPrefix = "cdcview";
     private String slotName = "cdcview_slot";
     private String publicationName = "cdcview_pub";
+    /** Debezium poll.interval.ms. 기본 500ms는 배치 누적 대기로 지연 바닥을 만든다(T1). */
+    private int pollIntervalMs = 10;
+    /** Debezium max.batch.size. 낮추면 부분 배치를 더 빨리 방출(지연↓, 처리량 트레이드오프). */
+    private int maxBatchSize = 256;
 
     public String getUrl() {
         return url;
@@ -51,6 +55,22 @@ public class ConnectProperties {
 
     public void setPublicationName(String publicationName) {
         this.publicationName = publicationName;
+    }
+
+    public int getPollIntervalMs() {
+        return pollIntervalMs;
+    }
+
+    public void setPollIntervalMs(int pollIntervalMs) {
+        this.pollIntervalMs = pollIntervalMs;
+    }
+
+    public int getMaxBatchSize() {
+        return maxBatchSize;
+    }
+
+    public void setMaxBatchSize(int maxBatchSize) {
+        this.maxBatchSize = maxBatchSize;
     }
 
     /** 테이블(public.orders)에 대응하는 CDC 토픽명. */

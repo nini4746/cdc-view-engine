@@ -14,10 +14,14 @@ cdcview:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     application-id: ${KAFKA_APPLICATION_ID:cdc-view-engine}
     state-dir: ${KAFKA_STATE_DIR:./data/kafka-streams}
+    commit-interval-ms: ${KAFKA_COMMIT_INTERVAL_MS:100}
   connect:
     url: ${CONNECT_URL:http://localhost:8083}
     connector-name: ${CONNECT_CONNECTOR_NAME:cdcview-postgres}
     topic-prefix: ${CONNECT_TOPIC_PREFIX:cdcview}
+    # 지연 바닥 튜닝 (T1). Debezium 기본 poll.interval.ms=500 / max.batch.size=2048 대비 낮춤.
+    poll-interval-ms: ${CONNECT_POLL_INTERVAL_MS:10}
+    max-batch-size: ${CONNECT_MAX_BATCH_SIZE:256}
   postgres:
     host: ${POSTGRES_HOST:localhost}
     port: ${POSTGRES_PORT:5432}

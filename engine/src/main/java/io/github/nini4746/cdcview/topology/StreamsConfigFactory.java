@@ -31,8 +31,8 @@ public class StreamsConfigFactory {
         p.put(StreamsConfig.PROCESSING_GUARANTEE_CONFIG, processingGuarantee);
         // 단일 브로커 데모: 복제 계수 1
         p.put(StreamsConfig.REPLICATION_FACTOR_CONFIG, 1);
-        // EOS 기본 commit.interval.ms=100ms 유지(지연 목표 R9 대비 균형). 필요 시 벤치에서 튜닝.
-        p.put(StreamsConfig.COMMIT_INTERVAL_MS_CONFIG, 100);
+        // commit.interval.ms (T1 실험용 env 조절 가능, 기본 100ms). EOS 처리량 대비 지연 균형.
+        p.put(StreamsConfig.COMMIT_INTERVAL_MS_CONFIG, kafka.getCommitIntervalMs());
         p.put(StreamsConfig.NUM_STREAM_THREADS_CONFIG, 1);
         // Debezium 초기 스냅샷(op=r) 포함 전체 히스토리를 읽어 상태를 구축(재구축 섀도도 동일)
         p.put(StreamsConfig.consumerPrefix(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG), "earliest");

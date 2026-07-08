@@ -40,6 +40,10 @@ public class ConnectorConfigFactory {
         c.put("topic.prefix", connect.getTopicPrefix());
         c.put("table.include.list", includeList);
         c.put("snapshot.mode", "initial");
+        // 지연 바닥 튜닝 (T1): poll.interval.ms 기본 500ms가 배치 누적 대기로 수백 ms 지연을
+        // 유발. 낮은 값 + 작은 max.batch.size로 부분 배치를 빨리 방출한다.
+        c.put("poll.interval.ms", String.valueOf(connect.getPollIntervalMs()));
+        c.put("max.batch.size", String.valueOf(connect.getMaxBatchSize()));
         c.put("slot.name", connect.getSlotName());
         c.put("publication.name", connect.getPublicationName());
         c.put("publication.autocreate.mode", "filtered");

@@ -9,6 +9,8 @@ public class KafkaProperties {
     private String bootstrapServers = "localhost:9092";
     private String applicationId = "cdc-view-engine";
     private String stateDir = "./data/kafka-streams";
+    /** Kafka Streams commit.interval.ms. EOS 처리량 대비 지연 트레이드오프 (T1 실험용). */
+    private int commitIntervalMs = 100;
 
     public String getBootstrapServers() {
         return bootstrapServers;
@@ -32,5 +34,13 @@ public class KafkaProperties {
 
     public void setStateDir(String stateDir) {
         this.stateDir = stateDir;
+    }
+
+    public int getCommitIntervalMs() {
+        return commitIntervalMs;
+    }
+
+    public void setCommitIntervalMs(int commitIntervalMs) {
+        this.commitIntervalMs = commitIntervalMs;
     }
 }

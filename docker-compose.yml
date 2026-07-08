@@ -82,6 +82,9 @@ services:
       POSTGRES_USER: app
       POSTGRES_PASSWORD: app
       CDCVIEW_VIEWS_DIR: /app/views
+      CONNECT_POLL_INTERVAL_MS: ${CONNECT_POLL_INTERVAL_MS:-10}
+      CONNECT_MAX_BATCH_SIZE: ${CONNECT_MAX_BATCH_SIZE:-256}
+      KAFKA_COMMIT_INTERVAL_MS: ${KAFKA_COMMIT_INTERVAL_MS:-100}
     volumes:
       - ./views:/app/views:ro
     depends_on:

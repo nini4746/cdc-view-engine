@@ -27,5 +27,8 @@ class ConnectorConfigFactoryTest {
         assertThat(c).containsEntry("decimal.handling.mode", "double");
         assertThat(c).containsEntry("tombstones.on.delete", "false");
         assertThat(c).containsEntry("snapshot.mode", "initial");
+        // T1 지연 바닥 튜닝: 기본값 poll.interval.ms=10, max.batch.size=256
+        assertThat(c).containsEntry("poll.interval.ms", "10");
+        assertThat(c).containsEntry("max.batch.size", "256");
     }
 }
