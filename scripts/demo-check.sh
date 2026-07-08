@@ -6,7 +6,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-REST="http://localhost:8080"
+REST="${REST:-http://localhost:8080}"   # 호스트 8080 충돌 시 오버라이드 (예: REST=http://localhost:18080)
 TIMEOUT="${TIMEOUT:-300}"   # 5분
 
 log() { echo "[demo-check] $*"; }

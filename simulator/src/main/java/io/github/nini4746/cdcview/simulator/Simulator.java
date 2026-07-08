@@ -80,23 +80,29 @@ public final class Simulator {
         long start = System.currentTimeMillis();
         lastLogAt = start;
         final long windowMs = 10;
-        final long perWindow = Math.max(1, Math.round(rate * (windowMs / 1000.0)));
+        // 일시 정지(GC, DB 지연) 후 폭주 방지: 한 배치 상한 = 1초 분량
+        final long maxBatch = Math.max(1, rate);
 
+        // deficit 방식(Plan 13, O1 수정): 상대 sleep 드리프트를 매 루프에서 보정해
+        // 장기 평균 rate가 target에 수렴한다.
         while (System.currentTimeMillis() - start < durationMs) {
-            long windowStart = System.nanoTime();
-            try (Connection c = ds.getConnection()) {
-                c.setAutoCommit(false);
-                for (int i = 0; i < perWindow; i++) {
-                    emitOne(c);
+            long elapsedMs = System.currentTimeMillis() - start;
+            long expected = (elapsedMs + windowMs) * rate / 1000;
+            long deficit = Math.min(expected - emitted, maxBatch);
+            if (deficit > 0) {
+                try (Connection c = ds.getConnection()) {
+                    c.setAutoCommit(false);
+                    for (long i = 0; i < deficit; i++) {
+                        emitOne(c);
+                    }
+                    c.commit();
                 }
-                c.commit();
+                emitted += deficit;
+                windowEmitted += deficit;
             }
-            emitted += perWindow;
-            windowEmitted += perWindow;
             maybeLog();
 
-            long elapsedNs = System.nanoTime() - windowStart;
-            long sleepMs = windowMs - elapsedNs / 1_000_000;
+            long sleepMs = windowMs - (System.currentTimeMillis() - start - elapsedMs);
             if (sleepMs > 0) {
                 Thread.sleep(sleepMs);
             }

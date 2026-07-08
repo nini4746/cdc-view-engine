@@ -33,7 +33,7 @@
 ## 검증
 
 - [ ] AC7-1: POST /admin/verify/{view} 가 스냅샷 기반 기대값과 뷰를 비교해 불일치 키 수 + 샘플 (최대 10건) 리포트를 반환한다
-- [ ] AC7-2: quiesce 조건 (입력 정지 + lag 0) 에서 10만 이벤트 처리 후 검증 결과 불일치 0건 (verdict: pass)
+- [x] AC7-2: quiesce 조건 (입력 정지 + lag 0) 에서 10만 이벤트 처리 후 검증 결과 불일치 0건 (verdict: pass) - 2026-07-07 V2 실측: SIM_RATE=300으로 102,655 이벤트 주입 → 시뮬레이터 정지 → 90초 대기 (consumer group 5파티션 lag 0 확인) → `POST /admin/verify/seller-dashboard` → quiesced=true, verdict=pass, mismatchCount=0, 100/100 groups. 윈도우 뷰(seller-sales-window)는 엔진이 명시적으로 400 "MVP 범위 밖" 거부 (ExpectedViewSqlGenerator 의도적 가드, Plan 08 설계 노트대로 - 조용한 실패 아님). 상세: .planning/v2-consistency-chaos-verification.md
 - [ ] AC7-3: 스트림이 흐르는 중 실행하면 non-quiesced 플래그가 표시되고 verdict가 없다
 - [ ] AC7-4 (N4): 검증 실행 중 REST 조회 루프가 계속 200으로 응답한다
 

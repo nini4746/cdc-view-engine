@@ -35,8 +35,8 @@
 
 - [ ] AC6-1: processing.guarantee=exactly_once_v2 활성이 설정 테스트로 검증된다
 - [ ] AC6-2 (N1): 동일 LSN 이벤트 2회 주입에도 sum/count 값 불변 - 동일 커밋의 2회 반영이 발생하지 않는다
-- [ ] AC6-3: 처리 도중 kill -9 후 재시작 → 최종 뷰 값이 무중단 실행 기대값과 동일 (chaos-restart-test.sh 통과)
-- [ ] AC6-4: scripts/chaos-restart-test.sh 가 저장소에 존재하고 반복 실행 가능하다
+- [x] AC6-3: 처리 도중 kill -9 후 재시작 → 최종 뷰 값이 무중단 실행 기대값과 동일 (chaos-restart-test.sh 통과) - 2026-07-07 V2 실측: N=200 시드 후 처리 도중 `docker compose kill -s KILL engine` → 재기동 → 최종 뷰 count=200, sum=20100 (기대값 정확히 일치, 유실/중복 0). 클린 기동+kill -9 재시작 양 경로 한 실행에서 커버. 상세: .planning/v2-consistency-chaos-verification.md
+- [x] AC6-4: scripts/chaos-restart-test.sh 가 저장소에 존재하고 반복 실행 가능하다 - 2026-07-07 V2 실측: 2회 연속 실행 (pass B, C) 전부 PASS. 매 실행 down -v로 초기화. 검증 중 스크립트 결함 3건 (한글 변수 파싱, lag 거짓양성, 시뮬레이터 시드 오염) 수정
 
 테스트 명령어:
 ```bash
