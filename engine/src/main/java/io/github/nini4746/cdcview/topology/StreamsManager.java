@@ -8,6 +8,8 @@ import java.time.Duration;
 import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.Topology;
+import org.apache.kafka.streams.errors.MissingSourceTopicException;
+import org.apache.kafka.streams.errors.StreamsUncaughtExceptionHandler.StreamThreadExceptionResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationArguments;
@@ -57,8 +59,32 @@ public class StreamsManager implements ApplicationRunner {
         streams = new KafkaStreams(topology, configFactory.create(kafkaProps.getApplicationId()));
         streams.setStateListener((newState, oldState) ->
                 log.info("Streams 상태 전이: {} → {}", oldState, newState));
+        streams.setUncaughtExceptionHandler(ex -> {
+            StreamThreadExceptionResponse response = responseFor(ex);
+            if (response == StreamThreadExceptionResponse.REPLACE_THREAD) {
+                log.warn("소스 토픽 부재로 스트림 스레드 교체 후 재시도 (토픽 선생성 이후 잔여 경합): {}",
+                        ex.getMessage());
+            } else {
+                log.error("스트림 처리 예외 → 클라이언트 종료", ex);
+            }
+            return response;
+        });
         streams.start();
         instanceDirectory.register(streams);
+    }
+
+    /**
+     * Streams 예외 처리 방침 (Plan 12, E1). CDC 토픽은 기동 전 선생성되므로
+     * MissingSourceTopicException은 메타데이터 전파 지연 등 일시 경합 → 스레드 교체로 재시도.
+     * 그 외 예외는 기존 기본 동작(SHUTDOWN_CLIENT)을 유지해 결함을 은폐하지 않는다.
+     */
+    static StreamThreadExceptionResponse responseFor(Throwable ex) {
+        for (Throwable t = ex; t != null; t = t.getCause() == t ? null : t.getCause()) {
+            if (t instanceof MissingSourceTopicException) {
+                return StreamThreadExceptionResponse.REPLACE_THREAD;
+            }
+        }
+        return StreamThreadExceptionResponse.SHUTDOWN_CLIENT;
     }
 
     /** Plan 05/08 store 조회용. 미기동이면 null. */

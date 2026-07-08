@@ -31,8 +31,8 @@
 ## 검증
 
 - [x] AC10-3: 커머스 시뮬레이터가 compose로 함께 구동되어 주문/재고/정산 데이터를 설정 가능한 속도 (events/sec) 로 생성한다 - 2026-07-07 V1 실측: compose up +34초에 시뮬레이터 기동 (rate=100 sellers=100), rate 로그 출력 확인. 단 achieved 75~78/100 events/sec 로 목표 미달 (Plan 11 전 확인 필요). SIM_SEED 빈 문자열 크래시 결함 (D1) 수정 후 통과
-- [ ] AC10-4: compose up 후 5분 내 수동 개입 없이 GET /views/seller-dashboard/{id} 가 실데이터를 반환한다 (demo-check.sh 통과) - 2026-07-07 V1 실측 FAIL: 엔진 Streams가 기동 시 CDC 토픽 부재로 MissingSourceTopicException → 영구 ERROR (결함 E1, 엔진 코드). 엔진 컨테이너 재시작 워크어라운드 후에는 +7초 만에 실데이터 반환 (파이프라인 자체는 정상). 상세: .planning/v1-demo-verification.md
-- [ ] AC10-5: README 데모 절차 (명령어 3개 이하) 를 그대로 따라 재현 가능하다 (클린 체크아웃 기준으로 1회 실측) - 2026-07-07 V1: E1 해결 전까지 재현 불가 (AC10-4에 종속)
+- [x] AC10-4: compose up 후 5분 내 수동 개입 없이 GET /views/seller-dashboard/{id} 가 실데이터를 반환한다 (demo-check.sh 통과) - V1 (2026-07-07) FAIL: 결함 E1 (Streams가 CDC 토픽 부재로 영구 ERROR, .planning/v1-demo-verification.md). Plan 12 토픽 선생성으로 수정 후 V1.5 재실측 PASS: 클린 상태 (down -v) 에서 demo-check.sh 통과, compose up 시작부터 실데이터까지 52초 (엔진 이미지 재빌드 포함). 상세: .planning/v1.5-e1-fix-verification.md
+- [x] AC10-5: README 데모 절차 (명령어 3개 이하) 를 그대로 따라 재현 가능하다 (클린 체크아웃 기준으로 1회 실측) - V1.5 (2026-07-07) 실측 PASS: `docker compose up -d --build` → `curl -s http://localhost:8080/views/seller-dashboard/1 | jq` 실데이터 반환 → `docker compose down -v`. 명령어 3개, 수동 개입 없음
 
 테스트 명령어:
 ```bash
