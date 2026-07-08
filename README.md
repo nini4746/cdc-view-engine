@@ -35,12 +35,24 @@ Spring Boot, Kafka Streams, Debezium, PostgreSQL
 - 이 IP, 최근 1시간 계정 수
 - 이 카드, 오늘 누적 결제액
 
-## 차별화 공식 (S급 레포 헌팅에서 배운 것)
+## 정직한 비교 (Materialize / RisingWave / Kafka Streams 대비)
 
-1. 장애 서사: 기능 나열 대신 "Kafka 끊기면? 스키마 바뀌는 중에 이벤트 오면?" 시나리오 중심 README
-2. 정직한 비교: Kafka Streams 기본 기능/Materialize/RisingWave 대비 뭐가 다른지 명시
-3. 재현 가능한 데모
-4. 검증 수치화: 정합성 검증 테스트 규모, 처리량 벤치
+이 프로젝트는 범용 스트리밍 DB를 재발명하려는 게 아니라, **CDC → 구체화 뷰의 어려운 부분 4개(순서 뒤집힘·중복·스키마 변경 중 재구축·원본 대비 정합성)를 직접 구현하고 실측으로 증명**하는 포트폴리오다.
+
+**증명한 것 (실측):**
+- 정합성: 소스 스냅샷 대비 뷰 전수 비교에서 10만+ 이벤트 처리 후 **불일치 0/100 그룹** (verdict=pass). 검증기가 "항상 0" 가짜가 아님을 고의 오염 음성 테스트로 고정.
+- exactly-once: EOS v2 + LSN 멱등 필터. **처리 도중 kill -9 후 재시작에도 뷰 값 정확**(count=200/sum=20100, 유실·중복 0), 8파티션/8스레드에서도 유지.
+- 순서 뒤집힘: LSN 기반 stale 폐기 + DELETE 부활 방지 + grace 초과 지각 이벤트 DLQ 적재(흔적 없는 폐기 금지).
+- 스키마 변경 중 무중단 재구축: 섀도 빌드 + 원자적 스왑, 재구축~스왑 구간 조회에서 5xx/빈/혼합 응답 0건.
+- 성능: 10,000 events/sec, 10분 지속, DB 커밋→뷰 반영 **p95=537ms** (목표 ≤1s). 재현 가능한 벤치 하네스 + 하드웨어 사양 기록.
+
+**안 한 것 (정직한 경계):**
+- Materialize/RisingWave 같은 범용 SQL 스트리밍 엔진의 임의 쿼리·옵티마이저가 아니다. 뷰는 YAML로 선언하는 조인/집계 프리셋(count/sum/min/max/avg + tumbling/sliding 윈도우)에 한정.
+- **단일 인스턴스 전제**. 위 10,000/s는 8코어 단일 호스트의 처리량 상한이며, 더 높은 rate·수평 확장(interactive query 라우팅, 멀티노드)은 명시적 범위 외.
+- PostgreSQL 단일 소스만(Debezium). 외부 캐시 자동 무효화·관리 UI·인증은 범위 외.
+- Kafka Streams 위에 구축했으므로 Streams가 주는 것(EOS, state store)은 재구현이 아니라 활용. 차별점은 그 위의 CDC 정합성·재구축·순서 처리 계층.
+
+전 요구사항(R1~R11) 런타임 검증 완료. 상세: `.planning/v4-completion-report.md`.
 
 ## 데모 (명령어 3개)
 
