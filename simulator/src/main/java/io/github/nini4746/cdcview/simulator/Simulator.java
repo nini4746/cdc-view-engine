@@ -80,8 +80,10 @@ public final class Simulator {
         long start = System.currentTimeMillis();
         lastLogAt = start;
         final long windowMs = 10;
-        // 일시 정지(GC, DB 지연) 후 폭주 방지: 한 배치 상한 = 1초 분량
-        final long maxBatch = Math.max(1, rate);
+        // 일시 정지(GC, DB 지연) 후 폭주 방지 배치 상한. rate 전량(1초 분량)을 한 트랜잭션에
+        // 몰아 커밋하면 수천 행이 동일 커밋 ts를 갖게 되어 지연 측정이 왜곡된다(V3). 절대 상한
+        // 500행으로 제한해 커밋을 잘게 쪼갠다(고rate에서도 여러 루프에 걸쳐 따라잡음).
+        final long maxBatch = Math.max(1, Math.min(rate, 500));
 
         // deficit 방식(Plan 13, O1 수정): 상대 sleep 드리프트를 매 루프에서 보정해
         // 장기 평균 rate가 target에 수렴한다.

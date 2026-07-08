@@ -26,12 +26,32 @@ log() { echo "[bench] $*"; }
 
 prom() { curl -sf "$REST/actuator/prometheus" 2>/dev/null || true; }
 
-# view.apply.latency 특정 quantile (seconds) → ms
-quantile_ms() {  # quantile_ms <q>
-  prom | awk -v q="$1" -v view="$VIEW" '
-    $0 ~ /^view_apply_latency_seconds\{/ && $0 ~ ("quantile=\"" q "\"") && $0 ~ ("view=\"" view "\"") {
-      print $NF * 1000; exit
-    }'
+# view.apply.latency는 percentile histogram(누적 버킷)으로 노출된다. Micrometer 클라이언트
+# quantile 요약 라인은 publishPercentileHistogram과 함께 쓰면 나오지 않으므로, 워밍업을 제외한
+# 정상상태 분포는 [측정 시작, 측정 종료] 두 시점의 누적 버킷 스냅샷 차분(delta)으로 계산한다.
+
+# VIEW의 누적 버킷을 "le count" 라인으로 스냅샷(le=+Inf 포함)
+snapshot_buckets() {  # snapshot_buckets <outfile>
+  prom | grep '^view_apply_latency_seconds_bucket{' | grep "view=\"$VIEW\"" \
+    | sed -E 's/.*le="([^"]+)"\} ([0-9.eE+]+).*/\1 \2/' > "$1"
+}
+
+# 두 스냅샷의 차분 버킷에서 백분위 le 상한(ms) 산출. 미정이면 빈 출력.
+percentile_ms() {  # percentile_ms <startfile> <endfile> <p(0..1)>
+  awk -v p="$3" '
+    FNR==NR { s[$1]=$2; next }
+    { le[FNR]=$1; d[FNR]=$2 - (s[$1]+0); n=FNR }
+    END {
+      inf=d[n]                      # +Inf 버킷 델타 = 윈도우 전체 관측 수
+      if (inf <= 0) { exit }
+      target = p * inf
+      for (i=1;i<=n;i++) {
+        if (d[i] >= target) {
+          if (le[i] == "+Inf") { printf ">30000"; } else { printf "%.0f", le[i]*1000 }
+          exit
+        }
+      }
+    }' "$1" "$2"
 }
 
 counter_sum() {  # counter_sum <metric_prefix>
@@ -50,17 +70,30 @@ log "2) 워밍업 ${WARMUP_SEC}s (측정 제외)"
 sleep "$WARMUP_SEC"
 
 log "3) 측정 ${DURATION_SEC}s (${SCRAPE_INTERVAL}s 간격 스크레이프)"
+bstart=$(mktemp); bend=$(mktemp)
+snapshot_buckets "$bstart"                       # 측정 시작(워밍업 종료) 시점 누적 버킷
 received_start=$(counter_sum "cdc_events_received_total")
 elapsed=0
-p50=""; p95=""; p99=""
 while (( elapsed < DURATION_SEC )); do
   sleep "$SCRAPE_INTERVAL"
   elapsed=$((elapsed + SCRAPE_INTERVAL))
-  p50=$(quantile_ms 0.5); p95=$(quantile_ms 0.95); p99=$(quantile_ms 0.99)
-  log "  t=${elapsed}s p50=${p50:-?}ms p95=${p95:-?}ms p99=${p99:-?}ms"
+  snapshot_buckets "$bend"
+  p50=$(percentile_ms "$bstart" "$bend" 0.5)
+  p95=$(percentile_ms "$bstart" "$bend" 0.95)
+  p99=$(percentile_ms "$bstart" "$bend" 0.99)
+  # 구간 내 순시 lag(백로그) 관측 - 정상상태 판별용
+  lag=$(timeout 20 docker compose exec -T kafka /opt/kafka/bin/kafka-consumer-groups.sh \
+        --bootstrap-server localhost:9092 --describe --group cdc-view-engine 2>/dev/null \
+        | awk '$6 ~ /^[0-9]+$/ {s+=$6} END{printf "%.0f", s+0}')
+  log "  t=${elapsed}s p50=${p50:-?}ms p95=${p95:-?}ms p99=${p99:-?}ms lag=${lag:-?}"
 done
+snapshot_buckets "$bend"
+p50=$(percentile_ms "$bstart" "$bend" 0.5)
+p95=$(percentile_ms "$bstart" "$bend" 0.95)
+p99=$(percentile_ms "$bstart" "$bend" 0.99)
 received_end=$(counter_sum "cdc_events_received_total")
 late_events=$(counter_sum "view_late_events_total")
+window_count=$(awk 'FNR==NR{s[$1]=$2;next} $1=="+Inf"{printf "%.0f", $2-(s[$1]+0)}' "$bstart" "$bend")
 
 throughput=$(awk -v a="$received_start" -v b="$received_end" -v d="$DURATION_SEC" \
              'BEGIN{printf "%.0f", (b-a)/d}')
@@ -71,10 +104,11 @@ mem_bytes=$( (sysctl -n hw.memsize 2>/dev/null) || (awk '/MemTotal/{print $2*102
 docker_ncpu=$(docker info --format '{{.NCPU}}' 2>/dev/null || echo "?")
 docker_mem=$(docker info --format '{{.MemTotal}}' 2>/dev/null || echo "?")
 
-# 판정
+# 판정: p95가 수치이고(빈값/">30000" 아님) 목표 이하 AND DLQ 0
 verdict="FAIL"
-p95_int=$(awk -v p="${p95:-999999}" 'BEGIN{printf "%.0f", p}')
-if awk -v p="${p95:-999999}" -v t="$P95_TARGET_MS" 'BEGIN{exit !(p<=t)}' && [[ "${late_events:-1}" == "0" ]]; then
+if [[ -n "${p95:-}" && "${p95}" != ">"* ]] \
+   && awk -v p="${p95}" -v t="$P95_TARGET_MS" 'BEGIN{exit !(p<=t)}' \
+   && [[ "${late_events:-1}" == "0" ]]; then
   verdict="PASS"
 fi
 
@@ -100,6 +134,8 @@ cat > "$report" <<EOF
 - 목표 SIM_RATE: ${SIM_RATE} events/sec
 - 엔진 수신 처리량(측정 구간): ${throughput} events/sec
 - 누적 수신: $((received_end - received_start)) events / ${DURATION_SEC}s
+- 측정 윈도우 뷰 반영 관측 수(${VIEW}): ${window_count:-?} (워밍업 제외 델타)
+- 측정 종료 시 consumer lag(백로그): ${lag:-?} events
 
 ## 실행 조건
 
