@@ -17,6 +17,10 @@ import org.springframework.stereotype.Service;
  * (3) 라이브 따라잡기 감시 → (4) 레지스트리 서빙 포인터를 원자적으로 교체(단일 volatile 참조) →
  * (5) 구버전 정리. 스왑은 다단계 부분 스왑이 아닌 단일 참조 교체다(AC8-3의 무혼합 보장).
  * 실패/중단 시 기존 뷰 서빙에 영향이 없다.
+ *
+ * <p>진행 상태는 인메모리 맵과 {@link RebuildStateStore}에 이중 기록된다. 재시작으로 프로세스가
+ * 새로 뜨면 메모리 맵은 비어 있으므로, store에 남아 있던 비종결 레코드를 발견하면 크래시로 중단된
+ * 것으로 판단해 {@link RebuildState.Status#ABORTED}로 전환한다(감시/audit 신호 + 재요청 허용).
  */
 @Service
 public class RebuildService {
@@ -26,6 +30,7 @@ public class RebuildService {
     private final ViewRegistry registry;
     private final ColumnChecker columnChecker;
     private final ShadowBuilder shadowBuilder;
+    private final RebuildStateStore stateStore;
 
     private final ConcurrentMap<String, RebuildState> states = new ConcurrentHashMap<>();
     private final ExecutorService executor =
@@ -39,15 +44,17 @@ public class RebuildService {
     private long pollIntervalMs = 500;
     private int maxPollAttempts = 600; // 최대 5분
 
-    public RebuildService(ViewRegistry registry, ColumnChecker columnChecker, ShadowBuilder shadowBuilder) {
+    public RebuildService(ViewRegistry registry, ColumnChecker columnChecker, ShadowBuilder shadowBuilder,
+                           RebuildStateStore stateStore) {
         this.registry = registry;
         this.columnChecker = columnChecker;
         this.shadowBuilder = shadowBuilder;
+        this.stateStore = stateStore;
     }
 
     /** 재구축 요청. 검증 후 비동기로 파이프라인을 실행하고 현재 상태를 반환한다. */
     public RebuildState rebuild(String view) {
-        RebuildState existing = states.get(view);
+        RebuildState existing = reconcile(view);
         if (existing != null && !existing.isTerminal()) {
             throw new IllegalStateException("이미 진행 중인 재구축이 있습니다: " + view);
         }
@@ -62,6 +69,7 @@ public class RebuildService {
         RebuildState state = new RebuildState(view, RebuildState.Status.VALIDATING,
                 fromVersion, toVersion, "참조 컬럼 검증 중", now, now);
         states.put(view, state);
+        stateStore.save(state);
 
         // 참조 컬럼 존재 검증은 동기로 수행(즉시 400 반환 위해)
         columnChecker.verify(def);
@@ -100,17 +108,48 @@ public class RebuildService {
     }
 
     private void update(String view, RebuildState.Status status, String msg) {
-        states.computeIfPresent(view, (k, s) -> s.withStatus(status, msg));
+        states.computeIfPresent(view, (k, s) -> {
+            RebuildState updated = s.withStatus(status, msg);
+            stateStore.save(updated);
+            return updated;
+        });
     }
 
     public RebuildState status(String view) {
-        RebuildState s = states.get(view);
+        RebuildState s = reconcile(view);
         if (s != null) {
             return s;
         }
         return new RebuildState(view, RebuildState.Status.IDLE,
                 registry.currentVersion(view), registry.currentVersion(view),
                 "진행 중인 재구축 없음", 0, 0);
+    }
+
+    /**
+     * 뷰의 현재 상태를 확인한다. 이 프로세스 안에서 진행/완료된 것은 메모리 맵이 정답이다.
+     * 메모리에 없는데 store에 비종결 레코드가 남아 있다면 그 레코드를 남긴 프로세스가 완료 전에
+     * 죽었다는 뜻이므로(재시작 크래시 감지), ABORTED로 전환해 기록하고 캐시한다.
+     */
+    private RebuildState reconcile(String view) {
+        RebuildState inMemory = states.get(view);
+        if (inMemory != null) {
+            return inMemory;
+        }
+        return stateStore.find(view)
+                .map(persisted -> {
+                    RebuildState resolved = persisted.isTerminal()
+                            ? persisted
+                            : persisted.withStatus(RebuildState.Status.ABORTED,
+                                    "엔진 재시작으로 중단됨(이전 상태: " + persisted.status()
+                                            + ", v" + persisted.fromVersion() + "→v" + persisted.toVersion()
+                                            + ") - 이전 버전 서빙 유지, 재구축 재요청 가능");
+                    if (resolved != persisted) {
+                        stateStore.save(resolved);
+                    }
+                    states.put(view, resolved);
+                    return resolved;
+                })
+                .orElse(null);
     }
 
     // 테스트용 폴링 파라미터 조정

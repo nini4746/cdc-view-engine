@@ -7,6 +7,8 @@ import io.github.nini4746.cdcview.config.ViewDefinition;
 import io.github.nini4746.cdcview.config.ViewRegistry;
 import io.github.nini4746.cdcview.config.ViewsProperties;
 import java.time.Duration;
+import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
@@ -15,6 +17,7 @@ import org.junit.jupiter.api.Test;
 class RebuildServiceTest {
 
     private ViewRegistry registry;
+    private FakeRebuildStateStore store;
 
     @BeforeEach
     void setUp() {
@@ -22,10 +25,11 @@ class RebuildServiceTest {
         vp.setDirectory("../views");
         registry = new ViewRegistry(vp);
         registry.load();
+        store = new FakeRebuildStateStore();
     }
 
     private RebuildService service(ShadowBuilder shadow, ColumnChecker checker) {
-        RebuildService s = new RebuildService(registry, checker, shadow);
+        RebuildService s = new RebuildService(registry, checker, shadow, store);
         s.setPollParams(1, 1000);
         return s;
     }
@@ -62,7 +66,7 @@ class RebuildServiceTest {
     void versionStaysUntilCaughtUp() {
         // 느린 폴링으로 따라잡기 구간을 관측 가능하게 한다(50ms x 10회 ≈ 0.5s).
         RecordingShadow shadow = new RecordingShadow(10);
-        RebuildService svc = new RebuildService(registry, noopChecker(), shadow);
+        RebuildService svc = new RebuildService(registry, noopChecker(), shadow, store);
         svc.setPollParams(50, 1000);
 
         svc.rebuild("seller-dashboard");
@@ -99,6 +103,66 @@ class RebuildServiceTest {
         svc.rebuild("seller-dashboard");
         assertThatThrownBy(() -> svc.rebuild("seller-dashboard"))
                 .isInstanceOf(IllegalStateException.class);
+    }
+
+    // 크래시 감지: 진행 중이던 재구축을 새 서비스 인스턴스(재시작 시뮬레이션)가 발견하면 ABORTED로 전환한다.
+    @Test
+    void crashMidRebuildIsDetectedAsAbortedOnRestart() {
+        RecordingShadow shadow = new RecordingShadow(Integer.MAX_VALUE); // 영원히 안 따라잡음(크래시 시뮬레이션용)
+        RebuildService crashed = new RebuildService(registry, noopChecker(), shadow, store);
+        crashed.setPollParams(5, 1_000_000);
+
+        crashed.rebuild("seller-dashboard");
+        Awaitility.await().atMost(Duration.ofSeconds(2))
+                .until(() -> crashed.status("seller-dashboard").status() == RebuildState.Status.CATCHING_UP);
+
+        // "재시작": 같은 store 위에 새 RebuildService 인스턴스(인메모리 맵은 비어 있음)
+        RebuildService restarted = new RebuildService(registry, noopChecker(), new RecordingShadow(0), store);
+
+        RebuildState afterRestart = restarted.status("seller-dashboard");
+        assertThat(afterRestart.status()).isEqualTo(RebuildState.Status.ABORTED);
+        assertThat(afterRestart.isTerminal()).isTrue();
+        assertThat(afterRestart.message()).contains("재시작").contains("CATCHING_UP");
+        // 이전 버전이 계속 서빙된다(스왑 안 됨)
+        assertThat(registry.currentVersion("seller-dashboard")).isEqualTo(1);
+        // store에도 ABORTED로 영속화되어 다음에 다시 봐도 같은 결론이 나온다
+        assertThat(store.find("seller-dashboard")).get()
+                .extracting(RebuildState::status).isEqualTo(RebuildState.Status.ABORTED);
+
+        // ABORTED는 종결 상태이므로 재요청이 깨끗하게 받아들여진다
+        RebuildState retried = restarted.rebuild("seller-dashboard");
+        assertThat(retried.status()).isEqualTo(RebuildState.Status.VALIDATING);
+    }
+
+    // 정상 완료 시에는 크래시로 오인되지 않고 SWAPPED 종결 레코드가 store에 남는다.
+    @Test
+    void normalCompletionPersistsSwappedRecordNotMisreadAsCrash() {
+        RebuildService svc = service(new RecordingShadow(0), noopChecker());
+        svc.rebuild("seller-dashboard");
+        Awaitility.await().atMost(Duration.ofSeconds(5))
+                .until(() -> svc.status("seller-dashboard").status() == RebuildState.Status.SWAPPED);
+
+        assertThat(store.find("seller-dashboard")).get()
+                .extracting(RebuildState::status).isEqualTo(RebuildState.Status.SWAPPED);
+
+        // "재시작" 이후에도 정상 완료 기록은 그대로 SWAPPED로 보인다(ABORTED로 잘못 바뀌지 않음)
+        RebuildService restarted = new RebuildService(registry, noopChecker(), new RecordingShadow(0), store);
+        assertThat(restarted.status("seller-dashboard").status()).isEqualTo(RebuildState.Status.SWAPPED);
+    }
+
+    /** 인메모리 페이크 store. 여러 RebuildService 인스턴스가 같은 store를 공유해 "재시작"을 시뮬레이션한다. */
+    static class FakeRebuildStateStore implements RebuildStateStore {
+        private final ConcurrentHashMap<String, RebuildState> data = new ConcurrentHashMap<>();
+
+        @Override
+        public void save(RebuildState state) {
+            data.put(state.view(), state);
+        }
+
+        @Override
+        public Optional<RebuildState> find(String view) {
+            return Optional.ofNullable(data.get(view));
+        }
     }
 
     /** 호출을 기록하는 페이크 섀도 빌더. caughtUpAfter 회 이후 true. */

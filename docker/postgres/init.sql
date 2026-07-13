@@ -40,3 +40,15 @@ ALTER TABLE debezium_signal REPLICA IDENTITY FULL;
 
 -- Debezium 접속 계정에 논리 복제 권한 부여
 ALTER ROLE app WITH REPLICATION;
+
+-- 재구축 생명주기 상태 (Plan 09 rebuild). 엔진이 부팅 없이도 지연 생성하지만(JdbcRebuildStateStore),
+-- 데모 스택은 초기화 시점에 미리 만들어 둔다. 뷰당 최신 레코드 1건.
+CREATE TABLE IF NOT EXISTS cdcview_rebuild_state (
+    view_name    VARCHAR(255) PRIMARY KEY,
+    status       VARCHAR(32) NOT NULL,
+    from_version INT NOT NULL,
+    to_version   INT NOT NULL,
+    message      VARCHAR(2048),
+    started_at   BIGINT NOT NULL,
+    updated_at   BIGINT NOT NULL
+);
