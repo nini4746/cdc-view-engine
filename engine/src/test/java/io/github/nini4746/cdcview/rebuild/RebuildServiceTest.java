@@ -129,9 +129,13 @@ class RebuildServiceTest {
         assertThat(store.find("seller-dashboard")).get()
                 .extracting(RebuildState::status).isEqualTo(RebuildState.Status.ABORTED);
 
-        // ABORTED는 종결 상태이므로 재요청이 깨끗하게 받아들여진다
+        // ABORTED는 종결 상태이므로 재요청이 예외 없이 접수되고, 처음부터 다시 정상 완료된다
+        restarted.setPollParams(5, 1000);
         RebuildState retried = restarted.rebuild("seller-dashboard");
-        assertThat(retried.status()).isEqualTo(RebuildState.Status.VALIDATING);
+        assertThat(retried.status()).isNotEqualTo(RebuildState.Status.ABORTED);
+        Awaitility.await().atMost(Duration.ofSeconds(5))
+                .until(() -> restarted.status("seller-dashboard").status() == RebuildState.Status.SWAPPED);
+        assertThat(registry.currentVersion("seller-dashboard")).isEqualTo(2);
     }
 
     // 정상 완료 시에는 크래시로 오인되지 않고 SWAPPED 종결 레코드가 store에 남는다.
