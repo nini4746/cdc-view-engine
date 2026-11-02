@@ -34,3 +34,15 @@ record WindowResponse(String view, String key, List<WindowEntry> windows) {
 /** 404/400 등 에러 바디. */
 record ErrorResponse(String error, String view, String key) {
 }
+
+/** 피처 조회 요청의 (피처명, 윈도우) 한 건. */
+record FeatureRef(String name, String window) {
+}
+
+/** POST /api/v1/features/query 요청. */
+record FeatureQueryRequest(String subjectType, String subjectKey, List<FeatureRef> features) {
+}
+
+/** 피처 조회 응답. values는 참조 키 → 값, missing은 제공할 수 없는 참조 키. */
+record FeatureQueryResponse(Map<String, Double> values, List<String> missing) {
+}

@@ -52,6 +52,7 @@ public class ExpectedViewSqlGenerator {
         String as = agg.getAs();
         return switch (agg.getFunction()) {
             case COUNT -> "COUNT(*) AS " + as;
+            case COUNT_DISTINCT -> "COUNT(DISTINCT " + agg.getColumn() + ") AS " + as;
             case SUM -> "COALESCE(SUM(" + agg.getColumn() + "),0) AS " + as;
             case MIN -> "MIN(" + agg.getColumn() + ") AS " + as;
             case MAX -> "MAX(" + agg.getColumn() + ") AS " + as;

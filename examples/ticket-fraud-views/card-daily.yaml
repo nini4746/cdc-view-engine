@@ -1,0 +1,31 @@
+# ticket-fraud-engine 피처: 카드별 당일 결제 금액과 결제 계정 수. 당일은 UTC 기준이다.
+name: card-daily
+description: 카드별 당일 누적 결제액과 결제 계정 수 (tumbling window)
+
+sources:
+  - table: payment
+
+group_by: card_fingerprint
+
+window:
+  type: tumbling
+  size: 1d
+  grace: 30s
+
+aggregations:
+  - function: sum
+    column: amount
+    as: cumulative_amount
+  - function: count_distinct
+    column: account_id
+    as: distinct_accounts
+
+features:
+  - subject: CARD
+    name: cumulative_amount
+    window: 1d
+    field: cumulative_amount
+  - subject: CARD
+    name: distinct_accounts
+    window: 1d
+    field: distinct_accounts

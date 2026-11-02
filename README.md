@@ -47,12 +47,40 @@ Spring Boot, Kafka Streams, Debezium, PostgreSQL
 - 성능: 10,000 events/sec, 10분 지속, DB 커밋→뷰 반영 **p95=537ms** (목표 ≤1s). 재현 가능한 벤치 하네스 + 하드웨어 사양 기록.
 
 **안 한 것 (정직한 경계):**
-- Materialize/RisingWave 같은 범용 SQL 스트리밍 엔진의 임의 쿼리·옵티마이저가 아니다. 뷰는 YAML로 선언하는 조인/집계 프리셋(count/sum/min/max/avg + tumbling/sliding 윈도우)에 한정.
+- Materialize/RisingWave 같은 범용 SQL 스트리밍 엔진의 임의 쿼리·옵티마이저가 아니다. 뷰는 YAML로 선언하는 조인/집계 프리셋(count/count_distinct/sum/min/max/avg + tumbling/sliding 윈도우)에 한정.
 - **단일 인스턴스 전제**. 위 10,000/s는 8코어 단일 호스트의 처리량 상한이며, 더 높은 rate·수평 확장(interactive query 라우팅, 멀티노드)은 명시적 범위 외.
 - PostgreSQL 단일 소스만(Debezium). 외부 캐시 자동 무효화·관리 UI·인증은 범위 외.
 - Kafka Streams 위에 구축했으므로 Streams가 주는 것(EOS, state store)은 재구현이 아니라 활용. 차별점은 그 위의 CDC 정합성·재구축·순서 처리 계층.
 
 전 요구사항(R1~R11) 런타임 검증 완료. 상세: `.planning/v4-completion-report.md`.
+
+## 피처 조회 API
+
+`ticket-fraud-engine`의 판정 엔진이 쓰는 계약(`POST /api/v1/features/query`)을 제공한다. 뷰 YAML에 `features`를 선언하면 집계 필드가 `subject.name.window` 키로 노출된다.
+
+```bash
+curl -s localhost:8080/api/v1/features/query -H 'content-type: application/json' -d '{
+  "subjectType": "CARD", "subjectKey": "card-1",
+  "features": [{"name": "distinct_accounts", "window": "1d"}]
+}'
+# {"values":{"card.distinct_accounts.1d":2.0},"missing":[]}
+```
+
+- 값은 지금을 포함하는 윈도우 중 가장 오래된 것에서 읽는다. sliding 뷰의 정밀도는 advance 단위이고 tumbling 뷰는 현재 고정 구간이다.
+- 구간에 행이 없으면 count, count_distinct, sum은 0이다. 선언되지 않은 피처는 `missing`으로 응답한다.
+- `count_distinct`는 값별 행 수를 보관해 UPDATE와 DELETE를 정확히 되돌리고, 저장 공간은 고유 값 수에 비례한다.
+
+예시 뷰는 `examples/ticket-fraud-views/`에 있고, `views.directory`로 지정해 쓴다.
+
+| 참조 키 | 상태 |
+|---|---|
+| account.payment_attempts.10m | 제공 |
+| card.cumulative_amount.1d | 제공. 승인 건만 거르는 필터가 없어 모든 결제 행을 합산 |
+| card.distinct_accounts.1d | 제공 |
+| ip.distinct_accounts.1h | `missing`. `payment` 테이블에 IP 컬럼 없음 |
+| account.hold_release_cycles.10m | `missing`. 선점 해제 이력 테이블 없음 |
+
+계약과 집계는 단위 테스트로 검증했다. 두 서비스를 실제로 띄운 연동과 지연 측정은 아직 하지 않았다.
 
 ## 데모 (명령어 3개)
 

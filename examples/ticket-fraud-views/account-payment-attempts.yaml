@@ -1,0 +1,24 @@
+# ticket-fraud-engine 피처: 계정별 최근 10분 결제 시도 횟수.
+name: account-payment-attempts
+description: 계정별 최근 10분 결제 시도 횟수 (sliding window)
+
+sources:
+  - table: payment
+
+group_by: account_id
+
+window:
+  type: sliding
+  size: 10m
+  advance: 1m
+  grace: 30s
+
+aggregations:
+  - function: count
+    as: payment_attempts
+
+features:
+  - subject: ACCOUNT
+    name: payment_attempts
+    window: 10m
+    field: payment_attempts

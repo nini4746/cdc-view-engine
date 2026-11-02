@@ -15,6 +15,7 @@ public class ViewDefinition {
     private String groupBy;
     private List<Aggregation> aggregations;
     private Window window;
+    private List<Feature> features = List.of();
 
     public String getName() {
         return name;
@@ -38,6 +39,11 @@ public class ViewDefinition {
 
     public Window getWindow() {
         return window;
+    }
+
+    /** 이 뷰가 피처 조회 API로 노출하는 피처 목록. 없으면 빈 목록. */
+    public List<Feature> getFeatures() {
+        return features;
     }
 
     public boolean isWindowed() {
@@ -66,7 +72,7 @@ public class ViewDefinition {
 
     /** 집계 함수 화이트리스트. */
     public enum AggregateFunction {
-        COUNT, SUM, MIN, MAX, AVG
+        COUNT, COUNT_DISTINCT, SUM, MIN, MAX, AVG
     }
 
     /** 집계 항목: 함수 + 대상 컬럼 + 결과 필드명. */
@@ -129,6 +135,46 @@ public class ViewDefinition {
 
         String rawGrace() {
             return grace;
+        }
+    }
+
+    /** 피처 조회 주체. */
+    public enum SubjectType {
+        ACCOUNT, IP, CARD
+    }
+
+    /** 집계 필드를 피처 참조 키(subject.name.window)로 노출하는 선언. group_by 값이 주체 키다. */
+    public static class Feature {
+        private SubjectType subject;
+        private String name;
+        private String window;
+        private String field;
+
+        public SubjectType getSubject() {
+            return subject;
+        }
+
+        public String getName() {
+            return name;
+        }
+
+        /** 참조 키에 쓰이는 윈도우 표기(예: 10m). 뷰의 window.size와 같은 길이여야 한다. */
+        public String getWindow() {
+            return window;
+        }
+
+        /** 값을 읽을 집계 결과 필드(as). */
+        public String getField() {
+            return field;
+        }
+
+        /** 정규 참조 키. 예: account.payment_attempts.10m */
+        public String referenceKey() {
+            return referenceKey(subject, name, window);
+        }
+
+        public static String referenceKey(SubjectType subject, String name, String window) {
+            return subject.name().toLowerCase(java.util.Locale.ROOT) + "." + name + "." + window;
         }
     }
 

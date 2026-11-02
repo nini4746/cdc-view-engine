@@ -1,0 +1,15 @@
+name: feature-window-mismatch
+sources:
+  - table: payment
+group_by: account_id
+window:
+  type: tumbling
+  size: 10m
+aggregations:
+  - function: count
+    as: attempts
+features:
+  - subject: ACCOUNT
+    name: attempts
+    window: 1h
+    field: attempts

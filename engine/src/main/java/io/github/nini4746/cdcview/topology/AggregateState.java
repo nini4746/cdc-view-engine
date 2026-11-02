@@ -11,7 +11,7 @@ import java.util.TreeMap;
  * 한 그룹 키의 집계 누산 상태. state store에 저장되는 값.
  *
  * <p>증분 누산 방식: INSERT/READ는 after를 가산, UPDATE는 before 감산 + after 가산, DELETE는 before 감산.
- * sum/count/avg는 O(1) 증분, min/max는 값 멀티셋으로 감산 가능하게 유지한다.
+ * sum/count/avg는 O(1) 증분, min/max와 count_distinct는 값 멀티셋으로 감산 가능하게 유지한다.
  * freshness 메타(lastCommitTs/lastAppliedAt/lastLsn)를 함께 보관해 Plan 05 REST가 사용한다.
  *
  * <p>한계: 그룹 키가 바뀌는 UPDATE(예: 주문의 seller_id 변경)는 MVP 범위 밖이다(데모 도메인은 불변).
@@ -23,6 +23,7 @@ public class AggregateState {
     private Map<String, Double> avgSums = new HashMap<>();     // AVG: 필드 -> 합(분자)
     private Map<String, Long> avgCounts = new HashMap<>();     // AVG: 필드 -> 개수(분모)
     private Map<String, Map<String, Integer>> extremes = new HashMap<>(); // MIN/MAX: 필드 -> (값 -> 개수)
+    private Map<String, Map<String, Integer>> distincts = new HashMap<>(); // COUNT_DISTINCT: 필드 -> (값 -> 행 수)
 
     private long lastCommitTs = -1;
     private long lastAppliedAt = -1;
@@ -58,6 +59,13 @@ public class AggregateState {
             String field = agg.getAs();
             switch (agg.getFunction()) {
                 case COUNT -> counters.merge(field, (long) sign, Long::sum);
+                case COUNT_DISTINCT -> {
+                    // SQL COUNT(DISTINCT)와 같이 NULL은 세지 않는다. 숫자가 아닌 식별자도 허용한다.
+                    Object v = image.get(agg.getColumn());
+                    if (v != null) {
+                        adjust(distincts.computeIfAbsent(field, k -> new HashMap<>()), v.toString(), sign);
+                    }
+                }
                 case SUM -> {
                     Double v = numeric(image.get(agg.getColumn()));
                     if (v != null) {
@@ -90,8 +98,10 @@ public class AggregateState {
     }
 
     private void multiset(String field, double value, int sign) {
-        Map<String, Integer> ms = extremes.computeIfAbsent(field, k -> new HashMap<>());
-        String key = Double.toString(value);
+        adjust(extremes.computeIfAbsent(field, k -> new HashMap<>()), Double.toString(value), sign);
+    }
+
+    private static void adjust(Map<String, Integer> ms, String key, int sign) {
         int next = ms.getOrDefault(key, 0) + sign;
         if (next <= 0) {
             ms.remove(key);
@@ -121,6 +131,7 @@ public class AggregateState {
             String field = agg.getAs();
             out.put(field, switch (agg.getFunction()) {
                 case COUNT -> counters.getOrDefault(field, 0L);
+                case COUNT_DISTINCT -> (long) distincts.getOrDefault(field, Map.of()).size();
                 case SUM -> sums.getOrDefault(field, 0.0);
                 case AVG -> {
                     long n = avgCounts.getOrDefault(field, 0L);
@@ -187,6 +198,14 @@ public class AggregateState {
 
     public void setExtremes(Map<String, Map<String, Integer>> extremes) {
         this.extremes = extremes;
+    }
+
+    public Map<String, Map<String, Integer>> getDistincts() {
+        return distincts;
+    }
+
+    public void setDistincts(Map<String, Map<String, Integer>> distincts) {
+        this.distincts = distincts;
     }
 
     public long getLastCommitTs() {

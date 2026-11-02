@@ -93,6 +93,9 @@ public class ViewDefinitionLoader {
     }
 
     private void validate(String file, ViewDefinition def) {
+        if (def.getFeatures() == null) {
+            throw new ViewDefinitionException(file, "features", "features는 목록이어야 합니다");
+        }
         require(file, "name", def.getName());
         require(file, "sources", def.getSources());
         require(file, "group_by", def.getGroupBy());
@@ -142,6 +145,29 @@ public class ViewDefinitionLoader {
         }
 
         validateWindow(file, def.getWindow());
+        validateFeatures(file, def, resultNames);
+    }
+
+    private void validateFeatures(String file, ViewDefinition def, Set<String> resultNames) {
+        for (int i = 0; i < def.getFeatures().size(); i++) {
+            ViewDefinition.Feature feature = def.getFeatures().get(i);
+            String base = "features[" + i + "]";
+            require(file, base + ".subject", feature.getSubject());
+            require(file, base + ".name", feature.getName());
+            require(file, base + ".window", feature.getWindow());
+            require(file, base + ".field", feature.getField());
+            if (!def.isWindowed()) {
+                throw new ViewDefinitionException(file, base, "피처는 윈도우 뷰에만 선언할 수 있습니다");
+            }
+            if (!parseDuration(file, base + ".window", feature.getWindow()).equals(def.getWindow().getSize())) {
+                throw new ViewDefinitionException(file, base + ".window",
+                        "피처 윈도우가 뷰의 window.size와 다릅니다");
+            }
+            if (!resultNames.contains(feature.getField())) {
+                throw new ViewDefinitionException(file, base + ".field",
+                        "존재하지 않는 집계 필드 참조: '" + feature.getField() + "'");
+            }
+        }
     }
 
     private void validateWindow(String file, ViewDefinition.Window window) {
