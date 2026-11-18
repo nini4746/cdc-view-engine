@@ -235,6 +235,8 @@ cdc-view-engine/
 
 - [docs/SRS.md](docs/SRS.md) - 요구사항 명세
 - [docs/SDS.md](docs/SDS.md) - 설계 명세: 구성도, 시퀀스, ERD/자료구조, 모듈
+- [docs/adr/](docs/adr/README.md) - 설계 결정 기록
+- [CHANGELOG.md](CHANGELOG.md) - 변경 이력
 - [SPEC](.planning/SPEC.md) - 요구사항과 수용 기준
 - [최종 완료 리포트](.planning/v4-completion-report.md) - 수용 기준별 테스트/실측 근거
 - [정합성·카오스 검증](.planning/v2-consistency-chaos-verification.md)

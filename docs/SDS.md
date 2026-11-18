@@ -663,6 +663,8 @@ query(subjectType, subjectKey, features):
 
 ## 4. 설계 근거
 
+각 결정의 배경과 결과는 [ADR](adr/README.md)에 기록되어 있습니다.
+
 | 결정 | 대안 | 선택 이유 |
 |---|---|---|
 | 뷰 상태를 Kafka Streams state store(RocksDB)에 두고 같은 프로세스에서 서빙 | 외부 DB나 Redis에 결과 저장 | changelog로 복원되고 EOS 트랜잭션에 포함됨. 별도 저장소 없이 단일 인스턴스로 서빙 |
