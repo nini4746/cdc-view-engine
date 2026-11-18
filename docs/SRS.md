@@ -8,7 +8,7 @@
 
 ### 1.1 목적
 
-이 문서는 cdc-view-engine이 무엇을 해야 하는지 정의합니다. PostgreSQL 변경(CDC)을 받아 집계 뷰를 항상 최신으로 유지하고 REST로 제공하는 엔진의 기능, 성능, 신뢰성 요구사항과 그 검증 근거를 담습니다. 설계는 [SDS](SDS.md)에서 다룹니다.
+이 문서는 cdc-view-engine이 무엇을 해야 하는지 정의합니다. PostgreSQL 변경(CDC)을 받아 집계 뷰를 항상 최신으로 유지하고 REST로 제공하는 엔진(피처 조회 API 포함)의 기능, 성능, 신뢰성 요구사항과 그 검증 근거를 담습니다. 설계는 [SDS](SDS.md)에서 다룹니다.
 
 ### 1.2 범위
 
@@ -16,9 +16,10 @@ cdc-view-engine은 PostgreSQL 테이블 변경을 Debezium과 Kafka Streams로 �
 
 범위 내:
 - PostgreSQL 단일 소스 CDC (Debezium, Kafka Connect)
-- YAML 뷰 정의: 소스 테이블, 조인 키, 집계 함수(count/sum/min/max/avg), 윈도우(tumbling/sliding)
+- YAML 뷰 정의: 소스 테이블, 조인 키, 집계 함수(count/count_distinct/sum/min/max/avg), 윈도우(tumbling/sliding), 피처 선언(`features`)
 - Kafka Streams 집계 구체화 + RocksDB state store
 - REST 조회 API (키 조회, 윈도우 범위 조회, ETag/freshness)
+- 피처 조회 API (`POST /api/v1/features/query`, `ticket-fraud-engine` 판정 엔진용 계약)과 예시 뷰(`examples/ticket-fraud-views/`)
 - 순서 뒤집힌 이벤트 처리 (LSN 기반 + grace + DLQ)
 - exactly-once (EOS v2 + LSN 멱등 필터 + 재시작 안전성)
 - 정합성 검증기 (소스 스냅샷 대비 뷰 비교, 온디맨드)
@@ -44,6 +45,7 @@ flowchart LR
     ENG -->|"검증 SQL"| PG
     ENG -->|"DLQ"| K
     CLI["클라이언트"] -->|"REST :8080"| ENG
+    TFE["ticket-fraud-engine (판정 엔진)"] -->|"피처 조회 REST"| ENG
     OPS["운영자"] -->|"admin REST"| ENG
 ```
 
@@ -52,9 +54,10 @@ flowchart LR
 - `views/*.yaml` 뷰 정의 로딩과 부팅 시 검증
 - Debezium 커넥터 자동 등록, CDC 토픽 선생성
 - 소스 행 단위 LSN 가드로 역순/중복 이벤트 폐기
-- count/sum/min/max/avg 증분 집계, tumbling/sliding 윈도우 집계
+- count/count_distinct/sum/min/max/avg 증분 집계, tumbling/sliding 윈도우 집계
 - grace 초과 지각 이벤트의 DLQ 적재와 카운터
 - 뷰 키 조회, 윈도우 범위 조회, ETag/304, freshness 메타
+- 뷰 YAML의 `features` 선언을 `subject.name.window` 참조 키로 노출하는 피처 조회
 - 원본 스냅샷 대비 정합성 검증
 - 섀도 재구축과 원자적 교체, 재구축 상태 영속화
 - Prometheus 지표 노출, 벤치마크 리포트 생성
@@ -64,6 +67,7 @@ flowchart LR
 | 사용자 | 특성과 사용 상황 |
 |---|---|
 | 서비스 개발자 | REST와 JSON에 익숙. 무거운 집계 쿼리 대신 미리 계산된 집계(예: 판매자별 대시보드)를 조회 |
+| 판정 엔진 (`ticket-fraud-engine`) | 주체(ACCOUNT/IP/CARD)와 피처 목록으로 피처 값을 조회. 제공할 수 없는 피처는 `missing`으로 받아 해당 룰만 건너뜀 |
 | 운영자 | Kafka/PostgreSQL 기본 운영 지식 보유. 정합성 검증, 뷰 정의 변경 후 재구축 수행 |
 | 데모 사용자 | Docker와 `curl`만 사용. `docker compose up` 한 번으로 전체 스택 실행 |
 
@@ -94,23 +98,28 @@ flowchart LR
 | 섀도 뷰 | 재구축 시 기존 뷰와 별도로 새로 만드는 다음 버전 뷰 |
 | quiesce | 입력이 멈추고 consumer lag이 0인 상태 |
 | freshness | 응답 값이 반영된 시점 정보(원본 커밋 시각, 뷰 반영 시각) |
+| 피처 | 뷰 YAML의 `features`로 노출한 집계 필드. 주체(`subject`), 이름, 윈도우로 식별 |
+| 참조 키 | 피처의 정규 이름 `subject.name.window` (예: `account.payment_attempts.10m`). 주체는 소문자 |
+| `missing` | 피처 조회 응답에서 제공할 수 없는 참조 키 목록. 에러가 아님 |
 
 ## 2. 참고 문서
 
 | 문서 | 내용 |
 |---|---|
 | [SDS](SDS.md) | 설계 명세 (구성, 시퀀스, 데이터, 모듈) |
-| [README](../README.md) | 개요, 빠른 시작, 벤치마크 요약 |
+| [README](../README.md) | 개요, 빠른 시작, 벤치마크 요약, 피처 조회 API |
 | [SPEC](../.planning/SPEC.md) | 원본 요구사항과 수용 기준 (R1~R10) |
 | [최종 완료 리포트](../.planning/v4-completion-report.md) | 수용 기준별 근거 매핑, 수동 스팟체크 |
 | [데모 검증](../.planning/v1-demo-verification.md), [기동 결함 수정 검증](../.planning/v1.5-e1-fix-verification.md) | compose 기동, healthy, 5분 내 실데이터 |
 | [정합성·카오스 검증](../.planning/v2-consistency-chaos-verification.md) | `kill -9` 재시작, 10만 이벤트 정합성 |
 | [벤치 하네스 검증](../.planning/v3-benchmark-verification.md), [T1 지연 튜닝](../.planning/t1-latency-tuning-verification.md), [T2 처리량 스케일링](../.planning/t2-throughput-scaling-verification.md) | 지연/처리량 실측 |
 | [벤치 리포트](../bench/reports/) | 실행별 리포트. 최종: `20260708-122749.md` |
+| [예시 뷰](../examples/ticket-fraud-views/) | 판정 엔진용 피처 뷰 (`account-payment-attempts.yaml`, `card-daily.yaml`) |
+| `ticket-fraud-engine` `docs/cdc-view-engine-contract.md` | 피처 조회 계약 (외부 저장소. `FeatureQueryApiTest`가 이 계약을 검증한다고 명시) |
 
 ## 3. 요구사항
 
-ID 규칙: `FR-n`은 요구사항, `FR-n.m`은 그 수용 기준입니다. 출처 `Rn`은 SPEC의 요구사항 번호입니다.
+ID 규칙: `FR-n`은 요구사항, `FR-n.m`은 그 수용 기준입니다. 출처 `Rn`은 SPEC의 요구사항 번호입니다. FR-11~FR-13은 SPEC 이후 커밋 `2d68c7f`(피처 조회 API와 count_distinct 집계)에서 추가된 기능이라 SPEC 번호가 없습니다.
 
 ### 3.1 기능 요구사항
 
@@ -235,6 +244,51 @@ ID 규칙: `FR-n`은 요구사항, `FR-n.m`은 그 수용 기준입니다. 출�
 - FR-10.4: compose up 후 5분 안에 수동 개입 없이 판매자 대시보드 뷰 조회가 실데이터를 반환한다
 - FR-10.5: README의 데모 절차(명령어 3개 이하)로 재현된다
 
+#### FR-11 피처 조회 API
+
+| 설명 | 우선순위 | 출처 | 검증 방법 |
+|---|---|---|---|
+| 시스템은 `POST /api/v1/features/query`로 주체 유형, 주체 키, 피처 목록을 받아 뷰 YAML에 선언된 피처 값을 참조 키(`subject.name.window`)별로 반환하고, 제공할 수 없는 피처는 `missing`으로 응답해야 한다 | 필수 | 커밋 2d68c7f, README 피처 조회 API | 시험 |
+
+수용 기준:
+- FR-11.1: 선언된 피처를 조회하면 200과 함께 `values`에 정규 참조 키(예: `account.payment_attempts.10m`)로 값이 들어가고 `missing`은 비어 있다
+- FR-11.2: 값은 지금을 포함하는 윈도우 중 가장 오래된 것에서 읽는다. sliding 뷰의 정밀도는 advance 단위이고 tumbling 뷰는 현재 고정 구간이다
+- FR-11.3: 구간에 행이 없는 count 피처는 `missing`이 아니라 0이다
+- FR-11.4: 구간에 행이 없으면 count_distinct, sum 피처도 0이고, min/max/avg 피처는 값이 없어 `missing`이다
+- FR-11.5: 한 뷰에 선언된 여러 피처를 한 요청으로 조회할 수 있다
+- FR-11.6: 선언되지 않은 피처는 에러가 아니라 200 응답의 `missing`에 참조 키로 들어간다
+- FR-11.7: `subjectType`이 ACCOUNT, IP, CARD가 아니거나 `subjectKey`가 비어 있으면 400이다
+- FR-11.8: Streams가 RUNNING 상태가 아니면 503이다
+- FR-11.9: `ticket-fraud-engine`과 두 서비스를 실제로 띄운 연동에서 계약대로 동작한다
+
+#### FR-12 count_distinct 집계
+
+| 설명 | 우선순위 | 출처 | 검증 방법 |
+|---|---|---|---|
+| 시스템은 `count_distinct` 집계로 그룹별 고유 값 수를 유지하고, UPDATE와 DELETE를 정확히 되돌려야 한다 | 필수 | 커밋 2d68c7f, README 피처 조회 API | 시험 |
+
+수용 기준:
+- FR-12.1: 같은 값의 행이 여러 개여도 그 값은 한 번만 센다
+- FR-12.2: DELETE는 그 값의 마지막 행이 지워질 때만 고유 값 수를 줄인다
+- FR-12.3: UPDATE로 값이 바뀌면 행이 이전 값에서 새 값으로 옮겨진다
+- FR-12.4: NULL은 세지 않는다 (SQL `COUNT(DISTINCT)`와 같음)
+- FR-12.5: state store 직렬화(JSON)를 거쳐도 값이 유지된다
+- FR-12.6: 정합성 검증기의 기대값 SQL은 `COUNT(DISTINCT column)`이다
+
+#### FR-13 피처 선언과 부팅 시 검증
+
+| 설명 | 우선순위 | 출처 | 검증 방법 |
+|---|---|---|---|
+| 시스템은 뷰 YAML의 `features` 선언(주체, 이름, 윈도우, 집계 필드)을 부팅 시 로딩·검증하고, 잘못된 선언이면 파일명과 필드 경로를 담아 부팅을 중단해야 한다 | 필수 | 커밋 2d68c7f, README 피처 조회 API | 시험 |
+
+수용 기준:
+- FR-13.1: `features[]`(`subject`, `name`, `window`, `field`)를 선언한 윈도우 뷰가 부팅 시 등록되고 피처 조회 API로 노출된다
+- FR-13.2: `field`가 집계 결과 필드(`as`)에 없으면 `features[i].field` 경로로 부팅이 실패한다
+- FR-13.3: 피처 `window`가 뷰의 `window.size`와 다르면 `features[i].window` 경로로 부팅이 실패한다
+- FR-13.4: 비윈도우 뷰에 피처를 선언하거나 `subject`, `name`, `window`, `field` 중 하나가 없으면 부팅이 실패한다
+- FR-13.5: 기간 표기에 일 단위 `1d`를 쓸 수 있다
+- FR-13.6: 판정 엔진용 예시 뷰 2개(`account-payment-attempts.yaml`, `card-daily.yaml`)가 `examples/ticket-fraud-views/`에 포함되고 `views.directory`로 지정해 쓸 수 있다
+
 ### 3.2 성능 요구사항
 
 | ID | 요구사항 | 목표치 | 검증 방법 |
@@ -253,8 +307,9 @@ ID 규칙: `FR-n`은 요구사항, `FR-n.m`은 그 수용 기준입니다. 출�
 
 | 구분 | 인터페이스 | 내용 |
 |---|---|---|
-| 사용자 | REST API (HTTP, JSON) | `GET /views/{view}/{key}`, `POST /admin/verify/{view}`, `POST /admin/views/{view}/rebuild`, `GET /admin/views/{view}/rebuild/status`. 상세는 [SDS 3.5](SDS.md#35-인터페이스-뷰) |
-| 사용자 | 뷰 정의 파일 | `views/*.yaml` (`name`, `sources`, `group_by`, `aggregations`, `window`) |
+| 사용자 | REST API (HTTP, JSON) | `GET /views/{view}/{key}`, `POST /api/v1/features/query`, `POST /admin/verify/{view}`, `POST /admin/views/{view}/rebuild`, `GET /admin/views/{view}/rebuild/status`. 상세는 [SDS 3.5](SDS.md#35-인터페이스-뷰) |
+| 사용자 | 뷰 정의 파일 | `views/*.yaml` (`name`, `sources`, `group_by`, `aggregations`, `window`, `features`). 디렉터리는 `views.directory`(`CDCVIEW_VIEWS_DIR`, 기본 `views`) |
+| 소프트웨어 | `ticket-fraud-engine` | 판정 엔진이 피처 조회 API의 소비자. 계약은 그쪽 저장소의 `docs/cdc-view-engine-contract.md` |
 | 소프트웨어 | PostgreSQL | JDBC. `pg_class`(REPLICA IDENTITY 확인), `information_schema.columns`(참조 컬럼 확인), 소스 테이블 집계 SQL(검증), `cdcview_rebuild_state` 읽기/쓰기 |
 | 소프트웨어 | Kafka Connect REST | `PUT /connectors/{name}/config` (Debezium 커넥터 등록) |
 | 소프트웨어 | Kafka | CDC 토픽 `cdcview.public.{table}` 소비, DLQ 토픽 `cdcview.dlq.late-events` 생산, AdminClient(토픽 생성, consumer lag 조회) |
@@ -267,7 +322,7 @@ ID 규칙: `FR-n`은 요구사항, `FR-n.m`은 그 수용 기준입니다. 출�
 |---|---|---|
 | 소스 테이블 (`orders`, `inventory`, `settlements`) | PostgreSQL | 원본. 엔진은 쓰지 않음 |
 | CDC 변경 이벤트 | Kafka CDC 토픽 | 섀도 재구축이 처음부터 다시 읽을 수 있도록 전체 이력이 남아 있어야 함 |
-| 뷰 집계 상태 (그룹 키 → 누산 값 + freshness) | RocksDB state store + changelog 토픽 | 재시작 후 복원 |
+| 뷰 집계 상태 (그룹 키 → 누산 값 + freshness) | RocksDB state store + changelog 토픽 | 재시작 후 복원. count_distinct는 값별 행 수를 보관하므로 저장 공간이 고유 값 수에 비례 |
 | 소스 행별 최고 LSN | RocksDB state store (`lsn-guard-*`) | 재시작 후 복원 (중복 방지의 근거) |
 | 지각 이벤트 | DLQ 토픽 | 버리지 않고 보관 |
 | 재구축 상태 (뷰당 최신 1건) | PostgreSQL `cdcview_rebuild_state` | 엔진 재시작 후에도 조회 가능 |
@@ -278,6 +333,9 @@ ID 규칙: `FR-n`은 요구사항, `FR-n.m`은 그 수용 기준입니다. 출�
 - 이벤트 순서 기준은 PostgreSQL LSN이다 (같은 행에서 last-write-wins)
 - event time은 처리 시각이 아니라 커밋 시각(`ts_ms`)이다
 - 윈도우는 tumbling, sliding(hopping) 2종이며 [start, end) 반개구간이다. grace 기본값은 30초다
+- 기간 표기는 `ms`, `s`, `m`, `h`, `d` 단위다
+- 피처는 윈도우 뷰에만 선언할 수 있고, 피처 윈도우는 뷰의 `window.size`와 같아야 한다. 피처의 주체 키는 뷰의 `group_by` 값이다
+- 피처 주체 유형은 ACCOUNT, IP, CARD 3종이다
 - 재구축은 수동 REST 트리거로만 시작한다
 - 대상 테이블은 `REPLICA IDENTITY FULL`이어야 한다
 - 단일 인스턴스를 전제한다
@@ -304,6 +362,7 @@ ID 규칙: `FR-n`은 요구사항, `FR-n.m`은 그 수용 기준입니다. 출�
 - 재구축 교체 시점에 API가 빈 결과나 신/구 뷰가 섞인 결과를 반환하면 안 된다 (FR-8.3)
 - grace를 넘긴 지각 이벤트를 흔적 없이 버리면 안 된다. DLQ 적재와 메트릭이 필수다 (FR-5.4)
 - 정합성 검증이 뷰 서빙을 막으면 안 된다 (FR-7.4)
+- 선언되지 않은 피처 조회를 에러로 응답하면 안 된다. `missing`으로 응답한다 (FR-11.6)
 
 ## 4. 검증
 
@@ -311,7 +370,7 @@ ID 규칙: `FR-n`은 요구사항, `FR-n.m`은 그 수용 기준입니다. 출�
 
 | 방법 | 수단 | 실행 |
 |---|---|---|
-| 시험 (단위) | JUnit 5. 토폴로지는 `TopologyTestDriver`, REST는 `MockMvc` + 페이크 `StoreAccess`, 재구축은 페이크 `ShadowBuilder` | `./gradlew :engine:test` |
+| 시험 (단위) | JUnit 5. 토폴로지는 `TopologyTestDriver`, REST와 피처 조회는 `MockMvc` + 페이크 `StoreAccess`(피처 조회는 고정 `Clock`), 재구축은 페이크 `ShadowBuilder` | `./gradlew :engine:test` |
 | 시험 (통합) | Testcontainers PostgreSQL (`*IT`). Docker가 없으면 skip. 로컬은 `DOCKER_API_VERSION=1.44`가 필요할 수 있음 | `./gradlew :engine:test` |
 | 시연 (카오스) | 결정적 시드 200건 커밋 후 엔진 `kill -9`, 재기동 후 count/sum 확인 | `bash scripts/chaos-restart-test.sh` |
 | 시연 (데모) | compose 기동부터 실데이터 조회까지 5분 타임아웃 | `bash scripts/demo-check.sh` |
@@ -319,7 +378,7 @@ ID 규칙: `FR-n`은 요구사항, `FR-n.m`은 그 수용 기준입니다. 출�
 | 시연 (성능) | 10,000 events/sec, 10분, 워밍업 60초 제외. 리포트는 `bench/reports/` | `bash bench/run-bench.sh` |
 | 검사 | 설정 파일, 코드 확인 | - |
 
-마지막 로컬 테스트 결과(`engine/build/test-results/test`): 18개 클래스, 64개 테스트, 59 통과, 5 skip(`ReplicaIdentityCheckerIT` 2, `JdbcRebuildStateStoreIT` 3), 0 실패. CI(`.github/workflows/ci.yml`)는 push(master)와 pull request마다 `./gradlew test`를 실행합니다.
+마지막 로컬 테스트 결과(`engine/build/test-results/test`): 18개 클래스, 64개 테스트, 59 통과, 5 skip(`ReplicaIdentityCheckerIT` 2, `JdbcRebuildStateStoreIT` 3), 0 실패. 이 결과는 커밋 `2d68c7f` 이전 실행이라 그 커밋에서 추가된 `api/FeatureQueryApiTest`(7개)와 `topology/CountDistinctTest`(7개)는 포함되어 있지 않습니다. CI(`.github/workflows/ci.yml`)는 push(master)와 pull request마다 `./gradlew test`를 실행합니다.
 
 ### 4.2 요구사항 추적표
 
@@ -368,6 +427,27 @@ ID 규칙: `FR-n`은 요구사항, `FR-n.m`은 그 수용 기준입니다. 출�
 | FR-10.3 | 시뮬레이터 동반 구동 + 속도 조절 | `simulator/src/main/java/io/github/nini4746/cdcview/simulator/Simulator.java`, `docker-compose.yml` | `v1-demo-verification.md`, `v2-consistency-chaos-verification.md` (target 300 = achieved 300) | 충족 |
 | FR-10.4 | 5분 안에 실데이터 | `cdc/CdcTopicProvisioner.java`, `scripts/demo-check.sh` | `v1.5-e1-fix-verification.md` (52초) | 충족 |
 | FR-10.5 | README 절차 재현 | `README.md` | `v1.5-e1-fix-verification.md` | 충족 |
+| FR-11.1 | 정규 참조 키로 값 반환 | `api/FeatureQueryController.java`, `api/FeatureQueryService.java`, `api/dto.java` | `api/FeatureQueryApiTest.returnsValueUnderCanonicalKey` | 충족 |
+| FR-11.2 | 지금을 포함한 가장 오래된 윈도우에서 읽기 | `api/FeatureQueryService.java` (`readFeature`) | `FeatureQueryApiTest.readsOldestWindowContainingNow` | 충족 |
+| FR-11.3 | 행 없는 count 피처는 0 | `api/FeatureQueryService.java` (`emptyWindowValue`) | `FeatureQueryApiTest.noRowsInWindowIsZeroNotMissing` | 충족 |
+| FR-11.4 | 행 없는 count_distinct/sum은 0, min/max/avg는 `missing` | `api/FeatureQueryService.java` (`emptyWindowValue`) | 코드만 있음. 이 경우를 다루는 테스트 없음 | 미검증 |
+| FR-11.5 | 한 뷰의 여러 피처 조회 | `api/FeatureQueryService.java` | `FeatureQueryApiTest.servesSeveralFeaturesFromOneView` | 충족 |
+| FR-11.6 | 미선언 피처는 `missing` | `api/FeatureQueryService.java` (`read`) | `FeatureQueryApiTest.undeclaredFeatureIsMissing` | 충족 |
+| FR-11.7 | 잘못된 주체 유형/빈 주체 키 400 | `api/FeatureQueryService.java`, `api/ApiExceptionHandler.java` | `FeatureQueryApiTest.unknownSubjectTypeIs400`, `blankSubjectKeyIs400` | 충족 |
+| FR-11.8 | Streams 미준비 503 | `api/FeatureQueryService.java`, `api/ApiExceptionHandler.java` | 피처 조회 경로의 503 테스트 없음 | 미검증 |
+| FR-11.9 | `ticket-fraud-engine` 실제 연동 | - | README: 두 서비스를 실제로 띄운 연동과 지연 측정은 아직 하지 않음 | 미검증 |
+| FR-12.1 | 같은 값은 한 번만 셈 | `topology/AggregateState.java` (`distincts`) | `topology/CountDistinctTest.countsEachValueOnce` | 충족 |
+| FR-12.2 | 마지막 행 삭제 시에만 감소 | `topology/AggregateState.java` | `CountDistinctTest.deleteRemovesValueOnlyWithItsLastRow` | 충족 |
+| FR-12.3 | UPDATE 시 값 이동 | `topology/AggregateState.java` | `CountDistinctTest.updateMovesRowBetweenValues` | 충족 |
+| FR-12.4 | NULL 미집계 | `topology/AggregateState.java` | `CountDistinctTest.nullIsNotCounted` | 충족 |
+| FR-12.5 | 직렬화 후 유지 | `topology/AggregateState.java` (`getDistincts`/`setDistincts`) | `CountDistinctTest.survivesJsonRoundTrip` | 충족 |
+| FR-12.6 | 검증기 SQL `COUNT(DISTINCT)` | `verify/ExpectedViewSqlGenerator.java` | `ExpectedViewSqlGeneratorTest`에 count_distinct 사례 없음 | 미검증 |
+| FR-13.1 | `features` 선언 로딩과 노출 | `config/ViewDefinition.java` (`Feature`, `SubjectType`), `config/ViewDefinitionLoader.java` | `FeatureQueryApiTest` (예시 뷰 디렉터리를 `ViewRegistry`로 로딩) | 충족 |
+| FR-13.2 | 없는 집계 필드 참조 시 부팅 실패 | `config/ViewDefinitionLoader.java` (`validateFeatures`) | `CountDistinctTest.featureFieldMustExist` | 충족 |
+| FR-13.3 | 피처 윈도우 불일치 시 부팅 실패 | `config/ViewDefinitionLoader.java` (`validateFeatures`) | `CountDistinctTest.featureWindowMustMatchView` | 충족 |
+| FR-13.4 | 비윈도우 뷰 선언, 하위 필드 누락 시 부팅 실패 | `config/ViewDefinitionLoader.java` (`validateFeatures`) | 코드만 있음. 이 경우를 다루는 테스트 없음 | 미검증 |
+| FR-13.5 | 기간 표기 `1d` | `config/Durations.java` | `card-daily.yaml`(`size: 1d`, 피처 `window: 1d`) 로딩과 `FeatureQueryApiTest.servesSeveralFeaturesFromOneView` | 충족 |
+| FR-13.6 | 예시 뷰 2개 포함 | `examples/ticket-fraud-views/` | `FeatureQueryApiTest`, `CountDistinctTest`가 예시 뷰를 로딩 | 충족 |
 | NFR-1 | p95 ≤ 1s @ 10,000/s | FR-9와 같음 | `bench/reports/20260708-122749.md` | 충족 |
 | NFR-2 | 측정 종료 시 lag 0 | FR-9와 같음 | `bench/reports/20260708-122749.md` (lag 0) | 충족 |
 | NFR-3 | 원커맨드 데모 | FR-10.4, FR-10.5와 같음 | `v1.5-e1-fix-verification.md` | 충족 |
@@ -391,6 +471,9 @@ ID 규칙: `FR-n`은 요구사항, `FR-n.m`은 그 수용 기준입니다. 출�
 - CDC 토픽에 전체 이력이 남아 있다 (섀도 재구축이 earliest부터 다시 읽음)
 - 지연 측정은 PG와 엔진이 같은 docker 호스트 시계를 쓴다는 전제에서 clock skew를 무시한다
 - 10,000 events/sec 결과는 8 CPU / 16GB 단일 호스트(Docker 8 NCPU / ~7.75GB) 기준이다
+- 예시 뷰(`examples/ticket-fraud-views/`)의 소스 `payment` 테이블은 데모 스키마(`docker/postgres/init.sql`)에 없다. 예시 뷰는 그 테이블이 있는 환경에서 `views.directory`로 지정해 쓴다
+- 피처 시간 기준은 UTC다 (`card-daily`의 당일은 UTC 기준)
+- 피처 조회는 계약과 집계를 단위 테스트로만 검증했다. `ticket-fraud-engine`과 두 서비스를 실제로 띄운 연동과 지연 측정은 하지 않았고, 피처 조회 지연에는 목표치가 없다 (README)
 
 ## 부록 B. 범위 외 항목
 
@@ -405,4 +488,7 @@ ID 규칙: `FR-n`은 요구사항, `FR-n.m`은 그 수용 기준입니다. 출�
 | 뷰가 참조하는 컬럼의 삭제 지원 | 컬럼 추가와 뷰 정의 변경만 지원. 참조 컬럼 삭제는 명시적 에러로 거부(FR-8.5) |
 | 윈도우 뷰 정합성 검증 | 검증기는 비윈도우 뷰만 지원. 윈도우 뷰 요청은 400으로 거부 |
 | 그룹 키가 바뀌는 UPDATE (예: 주문의 `seller_id` 변경) | 데모 도메인에서 그룹 키는 불변 |
+| 피처 `ip.distinct_accounts.1h` | `payment` 테이블에 IP 컬럼 없음. 조회 시 `missing` |
+| 피처 `account.hold_release_cycles.10m` | 선점 해제 이력 테이블 없음. 조회 시 `missing` |
+| `card.cumulative_amount.1d`의 승인 건 필터 | 승인 건만 거르는 필터가 없어 모든 결제 행을 합산 |
 | 재구축 재개 | 엔진 재시작 시 섀도 스트림도 사라지므로 `ABORTED`로 표시하고 처음부터 재요청 |

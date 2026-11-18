@@ -12,7 +12,7 @@
 
 ### 1.2 범위
 
-`engine`(Spring Boot + Kafka Streams 서버)과 이를 둘러싼 데모 스택(PostgreSQL, Kafka, Debezium Connect, `simulator`)을 다룹니다. 원본 DB 변경이 Kafka CDC 토픽을 거쳐 RocksDB state store의 집계 뷰가 되고, REST로 조회되기까지의 전 경로가 대상입니다.
+`engine`(Spring Boot + Kafka Streams 서버)과 이를 둘러싼 데모 스택(PostgreSQL, Kafka, Debezium Connect, `simulator`)을 다룹니다. 원본 DB 변경이 Kafka CDC 토픽을 거쳐 RocksDB state store의 집계 뷰가 되고, REST(뷰 조회, 피처 조회)로 조회되기까지의 전 경로가 대상입니다. 판정 엔진용 예시 뷰(`examples/ticket-fraud-views/`)도 포함합니다.
 
 ### 1.3 용어 정의
 
@@ -35,12 +35,14 @@
 | [최종 완료 리포트](../.planning/v4-completion-report.md) | 수용 기준별 근거 |
 | [T1 지연 튜닝](../.planning/t1-latency-tuning-verification.md), [T2 처리량 스케일링](../.planning/t2-throughput-scaling-verification.md) | 성능 설정값의 근거 |
 | [docker/postgres/init.sql](../docker/postgres/init.sql) | DB 스키마 |
+| [examples/ticket-fraud-views](../examples/ticket-fraud-views/) | 피처 선언 예시 뷰 |
 
 ## 2. 설계 이해관계자와 관심사
 
 | 이해관계자 | 관심사 | 다루는 뷰 |
 |---|---|---|
 | 서비스 개발자 (API 사용자) | 조회 경로, 응답 형식, 상태 코드, 캐시 검증 | 3.5 인터페이스, 3.6 상호작용 |
+| 판정 엔진 (`ticket-fraud-engine`) | 피처 조회 계약, 참조 키, `missing` 의미, 빈 구간 값 | 3.4.5 뷰 정의 YAML, 3.5.1 REST API, 3.6.4, 3.8.7 |
 | 운영자 | 정합성 검증, 재구축 절차와 상태, 장애 시 동작, 지표 | 3.6 상호작용, 3.7 상태 동적, 3.9 자원, 5 오류 처리 |
 | 엔진 개발자 | 모듈 경계, 증분 집계와 순서 처리 알고리즘, 확장 지점 | 3.2 구성, 3.3 논리, 3.8 알고리즘, 4 설계 근거 |
 | 데이터 담당자 | 소스 스키마, state store와 토픽 구조, 이벤트 형식 | 3.4 정보 |
@@ -57,6 +59,7 @@
 flowchart TB
     subgraph callers["HTTP 호출자"]
         CLIENT["클라이언트 (GET /views)"]
+        TFE["ticket-fraud-engine (POST /api/v1/features/query)"]
         OPS["운영자 (POST /admin)"]
         PROM["Prometheus 등 (/actuator)"]
     end
@@ -80,31 +83,35 @@ flowchart TB
 | Kafka Connect (Debezium) | 엔진이 부팅 시 커넥터 설정을 등록. 이후 WAL을 읽어 CDC 토픽에 씀 |
 | Kafka | CDC 토픽 소비, DLQ 토픽 생산, Streams 내부 토픽(repartition, changelog), consumer lag 조회 |
 | 클라이언트 / 운영자 | REST 호출 |
+| `ticket-fraud-engine` | 피처 조회 API 소비자. 두 서비스를 실제로 띄운 연동은 아직 하지 않음 (README) |
 | simulator | PG에 직접 쓰는 부하 생성기 (Kafka에 직접 쓰지 않음) |
 
 ### 3.2 구성 뷰
 
 ```mermaid
-flowchart LR
+flowchart TB
     subgraph ext["외부"]
         KAFKA["Kafka CDC 토픽"]
         PG["PostgreSQL"]
     end
     subgraph engine["engine (단일 JVM)"]
-        CFG["config: ViewRegistry"]
+        CFG["config: ViewRegistry (features 포함)"]
         CDC["cdc: 커넥터 등록, 파서"]
         TOPO["topology: TopologyBuilder"]
         ORD["ordering: LsnGuard, LateEventHandler"]
         STORE["state store (RocksDB)"]
         API["api: ViewQueryService"]
+        FQ["api: FeatureQueryService"]
         VER["verify: VerificationService"]
         REB["rebuild: RebuildService"]
     end
     CFG --> TOPO
+    CFG --> FQ
     KAFKA --> TOPO
     TOPO --> ORD
     ORD --> STORE
     STORE --> API
+    STORE --> FQ
     STORE --> VER
     VER --> PG
     REB --> TOPO
@@ -114,12 +121,12 @@ flowchart LR
 
 | 구성 요소 | 역할 | 기술 |
 |---|---|---|
-| `config` | `views/*.yaml` 로딩·검증, 뷰명 → 서빙 store 버전 해석 | Jackson YAML, Spring `@ConfigurationProperties` |
+| `config` | `views/*.yaml` 로딩·검증(`features` 선언 포함), 뷰명 → 서빙 store 버전 해석, 기간 표기 파싱(`ms`/`s`/`m`/`h`/`d`) | Jackson YAML, Spring `@ConfigurationProperties` |
 | `cdc` | REPLICA IDENTITY 검사, Debezium 커넥터 등록, CDC 토픽 선생성, Debezium envelope 파싱, 수신/지연 지표 | Spring `RestClient`, Kafka AdminClient, Jackson, Micrometer |
 | `topology` | 뷰 정의 → Streams 토폴로지 생성, EOS v2 설정, 메인 인스턴스 라이프사이클 | Kafka Streams |
 | `ordering` | 행 단위 LSN 가드(역순/중복 폐기), grace 초과 이벤트 DLQ 분기 | Kafka Streams Processor API, RocksDB store |
 | state store | 뷰 집계 상태와 LSN 가드 상태 저장. changelog 토픽으로 복원 | RocksDB (Kafka Streams 내장) |
-| `api` | 뷰 조회 REST, ETag/304, 메인+섀도 인스턴스 store 탐색 | Spring MVC, Kafka Streams interactive query |
+| `api` | 뷰 조회 REST, ETag/304, 메인+섀도 인스턴스 store 탐색, 피처 조회 REST(`FeatureQueryController`, `FeatureQueryService`) | Spring MVC, Kafka Streams interactive query |
 | `verify` | 원본 스냅샷 기대값 계산과 뷰 비교, quiesce 판정 | JDBC (REPEATABLE READ), Kafka AdminClient |
 | `rebuild` | 참조 컬럼 검증, 섀도 빌드, 따라잡기 감시, 원자적 교체, 상태 영속화 | Kafka Streams, JDBC |
 | `simulator` | 주문/재고/정산 변경을 설정 속도로 생성 | JDBC, HikariCP |
@@ -151,6 +158,13 @@ classDiagram
         +String advance
         +String grace
     }
+    class Feature {
+        +SubjectType subject
+        +String name
+        +String window
+        +String field
+        +referenceKey() String
+    }
     class ChangeEvent {
         +String table
         +Op op
@@ -162,8 +176,12 @@ classDiagram
         +long lastCommitTs
         +long lastAppliedAt
         +long lastLsn
+        +Map distincts
         +apply(ev, def) AggregateState
         +results(def) Map
+    }
+    class FeatureQueryService {
+        +query(request) FeatureQueryResponse
     }
     class ViewRegistry {
         +currentStoreName(view) String
@@ -178,6 +196,9 @@ classDiagram
     ViewDefinition "1" *-- "1..*" Source
     ViewDefinition "1" *-- "1..*" Aggregation
     ViewDefinition "1" *-- "0..1" Window
+    ViewDefinition "1" *-- "0..*" Feature
+    FeatureQueryService ..> ViewRegistry : 피처 탐색
+    FeatureQueryService ..> AggregateState : results
     ViewRegistry "1" o-- "*" ViewDefinition
     AggregateState ..> ChangeEvent : apply
     AggregateState ..> ViewDefinition : 집계 규칙
@@ -185,12 +206,15 @@ classDiagram
 
 | 타입 | 파일 | 설명 |
 |---|---|---|
-| `ViewDefinition` | `config/ViewDefinition.java` | YAML 뷰 정의. `AggregateFunction` = COUNT, SUM, MIN, MAX, AVG. `WindowType` = TUMBLING, SLIDING |
+| `ViewDefinition` | `config/ViewDefinition.java` | YAML 뷰 정의. `AggregateFunction` = COUNT, COUNT_DISTINCT, SUM, MIN, MAX, AVG. `WindowType` = TUMBLING, SLIDING. `features`가 없으면 빈 목록 |
+| `Feature` | `config/ViewDefinition.java` | 집계 필드를 참조 키 `subject.name.window`로 노출하는 선언. `SubjectType` = ACCOUNT, IP, CARD. 주체 키는 뷰의 `group_by` 값 |
 | `ChangeEvent` | `cdc/ChangeEvent.java` | 내부 이벤트 record: `table`, `op`(CREATE/UPDATE/DELETE/READ), `before`, `after`, `lsn`, `tsMs` |
 | `AggregateState` | `topology/AggregateState.java` | 그룹 키 하나의 누산 상태. state store 값 |
 | `ViewRegistry` | `config/ViewRegistry.java` | 뷰 정의 맵 + 뷰별 서빙 버전 맵 |
 | `RebuildState` | `rebuild/RebuildState.java` | 재구축 진행 상태 record. `Status` = IDLE, VALIDATING, SNAPSHOTTING, CATCHING_UP, SWAPPED, FAILED, ABORTED |
 | `StoreAccess` | `api/StoreAccess.java` | store 조회 추상화 (`get`, `windowFetch`, `scanAll`). 프로덕션은 `KafkaStreamsStoreAccess` |
+| `FeatureQueryService` | `api/FeatureQueryService.java` | 요청 검증, 참조 키로 피처 탐색, 윈도우 store에서 값 읽기. 테스트용으로 `Clock` 주입 가능 (기본 `Clock.systemUTC()`) |
+| `FeatureQueryRequest`, `FeatureRef`, `FeatureQueryResponse` | `api/dto.java` | 피처 조회 요청/응답 record |
 | `ShadowBuilder` | `rebuild/ShadowBuilder.java` | 섀도 빌드 추상화 (`startShadow`, `caughtUp`, `promote`, `discard`). 프로덕션은 `KafkaShadowBuilder` |
 | `RebuildStateStore` | `rebuild/RebuildStateStore.java` | 재구축 상태 영속화 (`save`, `find`). 프로덕션은 `JdbcRebuildStateStore` |
 | `QuiesceChecker` | `verify/QuiesceChecker.java` | consumer lag 합계, `isQuiesced()` = lag 0 |
@@ -267,6 +291,7 @@ erDiagram
 | `sums` | `Map<String, Double>` | SUM 결과 필드 → 합 |
 | `avgSums`, `avgCounts` | `Map<String, Double>`, `Map<String, Long>` | AVG 분자, 분모 |
 | `extremes` | `Map<String, Map<String, Integer>>` | MIN/MAX 결과 필드 → (값 → 개수) 멀티셋 |
+| `distincts` | `Map<String, Map<String, Integer>>` | COUNT_DISTINCT 결과 필드 → (값 문자열 → 행 수). 크기는 고유 값 수에 비례 |
 | `lastCommitTs` | `long` | 반영된 이벤트 중 최대 `ts_ms` |
 | `lastAppliedAt` | `long` | 마지막 반영 시각 (엔진 wall clock) |
 | `lastLsn` | `long` | 마지막 반영 이벤트의 LSN (ETag에 사용) |
@@ -304,14 +329,28 @@ NUMERIC은 `decimal.handling.mode=double`로 double로 도착합니다. DELETE t
 | `sources[].table` | 예 | 소스 테이블 |
 | `sources[].join_key` | 소스 2개 이상이면 예 | 그 테이블의 그룹 값 컬럼. 생략 시 `group_by` |
 | `group_by` | 예 | 그룹 키 |
-| `aggregations[].function` | 예 | `count`, `sum`, `min`, `max`, `avg` |
+| `aggregations[].function` | 예 | `count`, `count_distinct`, `sum`, `min`, `max`, `avg` |
 | `aggregations[].column` | count 외 예 | 집계 대상 컬럼 |
 | `aggregations[].as` | 예 | 결과 필드명 (중복 금지) |
 | `aggregations[].source` | 소스 2개 이상이면 예 | 컬럼이 속한 테이블 |
 | `window.type` | 윈도우 시 예 | `tumbling`, `sliding` |
-| `window.size` | 윈도우 시 예 | 기간 (`500ms`, `30s`, `10m`, `1h` 형식) |
+| `window.size` | 윈도우 시 예 | 기간 (`500ms`, `30s`, `10m`, `1h`, `1d` 형식) |
 | `window.advance` | sliding이면 예 | 이동 간격 |
 | `window.grace` | 아니오 | 기본 `30s` |
+| `features` | 아니오 | 피처 목록. 생략 시 빈 목록, 목록이 아니면 부팅 실패. 윈도우 뷰에만 허용 |
+| `features[].subject` | 예 | `ACCOUNT`, `IP`, `CARD` |
+| `features[].name` | 예 | 피처 이름 (참조 키의 가운데) |
+| `features[].window` | 예 | 참조 키의 윈도우 표기. 뷰의 `window.size`와 같은 길이여야 함 |
+| `features[].field` | 예 | 값을 읽을 집계 결과 필드(`aggregations[].as`) |
+
+예시 뷰 (`examples/ticket-fraud-views/`, 소스 `payment`):
+
+| 파일 | 윈도우 | 집계 | 노출 피처 |
+|---|---|---|---|
+| `account-payment-attempts.yaml` | sliding 10m, advance 1m, grace 30s, `group_by: account_id` | `count` → `payment_attempts` | `account.payment_attempts.10m` |
+| `card-daily.yaml` | tumbling 1d (UTC 당일), grace 30s, `group_by: card_fingerprint` | `sum(amount)` → `cumulative_amount`, `count_distinct(account_id)` → `distinct_accounts` | `card.cumulative_amount.1d`, `card.distinct_accounts.1d` |
+
+`ip.distinct_accounts.1h`(`payment` 테이블에 IP 컬럼 없음)와 `account.hold_release_cycles.10m`(선점 해제 이력 테이블 없음)은 선언하지 않았으므로 `missing`으로 응답합니다. `card.cumulative_amount.1d`는 승인 건만 거르는 필터가 없어 모든 결제 행을 합산합니다.
 
 ### 3.5 인터페이스 뷰
 
@@ -321,6 +360,7 @@ NUMERIC은 `decimal.handling.mode=double`로 double로 도착합니다. DELETE t
 |---|---|---|---|
 | GET | `/views/{view}/{key}` | 비윈도우 뷰 최신 값 | 200 `{view, key, values, freshness{sourceCommitTs, appliedAt}, version}` + ETag `"v{version}-{lastLsn}"`. `If-None-Match` 일치 시 304 |
 | GET | `/views/{view}/{key}?from={ms}&to={ms}` | 윈도우 뷰 범위 조회 | 200 `{view, key, windows[{start, end, values, freshness}]}` + ETag `"v{version}-w{maxLsn}"`. 304 동일 |
+| POST | `/api/v1/features/query` | 피처 조회. 요청 `{subjectType, subjectKey, features[{name, window}]}` | 200 `{values{참조 키: 값(double)}, missing[참조 키]}` |
 | POST | `/admin/verify/{view}` | 정합성 검증 (동기) | 200 `{view, quiesced, verdict, mismatchCount, samples, expectedGroups, actualGroups, durationMs}`. `verdict`는 `pass`/`fail`, non-quiesced면 `null` |
 | POST | `/admin/views/{view}/rebuild` | 재구축 요청 (비동기) | 202 `RebuildState` |
 | GET | `/admin/views/{view}/rebuild/status` | 재구축 상태 | 200 `RebuildState` `{view, status, fromVersion, toVersion, message, startedAt, updatedAt}` |
@@ -333,6 +373,9 @@ NUMERIC은 `decimal.handling.mode=double`로 double로 도착합니다. DELETE t
 | 없는 뷰 / 키 / 범위 내 윈도우 없음 (조회) | 404 | `{error, view, key}` |
 | 윈도우 뷰에 from/to 없음, 비윈도우 뷰에 from/to, from 또는 to 하나만, `from > to` | 400 | `{error, view, key}` |
 | Streams가 RUNNING이 아님, store 준비 전 | 503 | `{error, view: null, key: null}` |
+| 피처 조회: `subjectType`이 ACCOUNT/IP/CARD가 아님, `subjectKey` 비어 있음, `features` 없음 | 400 | `{error, view: "features", key}` |
+| 피처 조회: Streams가 RUNNING이 아님 | 503 | `{error, view: null, key: null}` |
+| 피처 조회: 선언되지 않은 피처 | 200 | 에러 아님. `missing`에 참조 키 |
 | 검증: 없는 뷰 | 404 | 메시지 문자열 |
 | 검증: 윈도우 뷰 | 400 | 메시지 문자열 |
 | 재구축: 참조 컬럼 없음 | 400 | 메시지 문자열 (누락 `table.column` 목록) |
@@ -446,6 +489,38 @@ sequenceDiagram
 
 교체 전까지 조회는 기존 버전 store를 읽습니다. 교체는 `ViewRegistry`의 서빙 버전 값 하나를 바꾸는 것이라 중간 상태가 없습니다. 따라잡기 타임아웃이나 예외가 나면 섀도를 정리하고 `FAILED`로 기록하며, 기존 버전 서빙은 그대로입니다.
 
+#### 3.6.4 피처 조회
+
+```mermaid
+sequenceDiagram
+    participant T as ticket-fraud-engine
+    participant FC as FeatureQueryController
+    participant FS as FeatureQueryService
+    participant VR as ViewRegistry
+    participant S as state store
+    T->>FC: POST /api/v1/features/query
+    FC->>FS: query(request)
+    alt subjectType 오류, subjectKey 비어 있음, features 없음
+        FS-->>T: 400
+    else Streams가 RUNNING이 아님
+        FS-->>T: 503
+    else 정상
+        loop 요청한 피처마다
+            FS->>VR: 참조 키가 선언된 뷰 찾기
+            alt 선언된 뷰 없음
+                Note over FS: missing에 추가
+            else 선언됨
+                FS->>S: windowFetch(now - size + 1, now)
+                S-->>FS: 윈도우 목록
+                Note over FS: 지금을 포함한 가장 오래된 윈도우의 field 값
+            end
+        end
+        FS-->>T: 200 values + missing
+    end
+```
+
+두 서비스를 실제로 띄운 연동과 지연 측정은 아직 하지 않았습니다. 이 흐름은 `FeatureQueryApiTest`(`MockMvc` + 페이크 `StoreAccess`)로만 검증했습니다.
+
 ### 3.7 상태 동적 뷰
 
 재구축 상태(`RebuildState.Status`)의 전이입니다. `IDLE`은 저장 레코드가 없을 때 `status` 조회가 돌려주는 값입니다.
@@ -510,9 +585,10 @@ mutate(image, sign):
         SUM:   sums[as] += sign * image[column]
         AVG:   avgSums[as] += sign * v, avgCounts[as] += sign
         MIN/MAX: extremes[as][v] += sign (0 이하면 제거)
+        COUNT_DISTINCT: v가 null이 아니면 distincts[as][str(v)] += sign (0 이하면 제거)
 ```
 
-다중 소스 뷰는 집계의 `source`가 이벤트 테이블과 같을 때만 반영합니다. MIN/MAX는 값 멀티셋을 유지해 DELETE 후에도 다시 계산할 수 있습니다. 결과는 `results()`에서 멀티셋의 최소/최대를 골라 냅니다.
+다중 소스 뷰는 집계의 `source`가 이벤트 테이블과 같을 때만 반영합니다. MIN/MAX는 값 멀티셋을 유지해 DELETE 후에도 다시 계산할 수 있습니다. 결과는 `results()`에서 멀티셋의 최소/최대를 골라 냅니다. COUNT_DISTINCT는 값별 행 수를 보관하므로 같은 값의 행이 남아 있으면 DELETE 후에도 그 값이 유지되고, 결과는 `distincts[as]`의 키 개수입니다. NULL은 세지 않고(SQL `COUNT(DISTINCT)`와 같음), 숫자가 아닌 식별자도 허용합니다.
 
 #### 3.8.3 토폴로지 구성 (`topology/TopologyBuilder.java`)
 
@@ -538,7 +614,7 @@ on record(ts):
 #### 3.8.5 정합성 검증 (`verify/`)
 
 1. `QuiesceChecker`로 메인 consumer group lag 합계를 구함. 0이면 quiesced
-2. `REPEATABLE READ` 읽기 전용 트랜잭션에서 소스 테이블별 `SELECT {join_key} AS group_key, 집계... GROUP BY {join_key}` 실행 후 그룹 키로 병합 (COUNT는 `COUNT(*)`, SUM은 `COALESCE(SUM(c),0)`)
+2. `REPEATABLE READ` 읽기 전용 트랜잭션에서 소스 테이블별 `SELECT {join_key} AS group_key, 집계... GROUP BY {join_key}` 실행 후 그룹 키로 병합 (COUNT는 `COUNT(*)`, COUNT_DISTINCT는 `COUNT(DISTINCT c)`, SUM은 `COALESCE(SUM(c),0)`)
 3. 서빙 store를 read-only로 전체 스캔해 `results()` 계산
 4. 두 키 집합의 합집합을 돌며 한쪽에만 있거나 필드 값 차이가 `1e-6` 이상이면 불일치
 5. quiesced면 `pass`/`fail`, 아니면 `verdict=null`. 샘플은 최대 10건
@@ -546,6 +622,25 @@ on record(ts):
 #### 3.8.6 섀도 따라잡기 판정 (`rebuild/KafkaShadowBuilder.java`)
 
 섀도 consumer group(`cdc-view-engine-shadow-{view}-v{N}`)의 커밋 오프셋과 각 파티션 끝 오프셋 차이를 더합니다. 커밋이 아직 없거나 조회가 실패하면 `Long.MAX_VALUE`로 보고 미완으로 처리합니다. 섀도 상태가 RUNNING/REBALANCING이고 lag이 0이면 따라잡은 것으로 봅니다.
+
+#### 3.8.7 피처 값 읽기 (`api/FeatureQueryService.java`)
+
+```
+query(subjectType, subjectKey, features):
+    subjectType이 ACCOUNT/IP/CARD가 아니거나 subjectKey가 비었거나 features가 없으면 400
+    Streams가 RUNNING이 아니면 503
+    for (name, window) in features:
+        ref = lower(subjectType) + "." + name + "." + window
+        ref를 선언한 (뷰, 피처)를 모든 뷰에서 찾음. 없으면 missing에 추가
+        now = clock.millis(); size = 뷰 window.size
+        rows = windowFetch(서빙 store, subjectKey, now - size + 1, now)
+               중 시작 시각이 (now - size, now] 인 것
+        rows가 비면: COUNT, COUNT_DISTINCT, SUM은 0, MIN/MAX/AVG는 missing
+        아니면 시작 시각이 가장 이른 윈도우의 results()[field]
+        값이 숫자가 아니면 missing
+```
+
+지금을 포함하는 윈도우 중 가장 오래된 것이 최근 구간을 가장 많이 덮습니다. sliding 뷰의 정밀도는 advance 단위이고, tumbling 뷰는 현재 고정 구간(예: UTC 당일)입니다.
 
 ### 3.9 자원 뷰
 
@@ -558,6 +653,8 @@ on record(ts):
 | Debezium poll 간격 / 배치 | 10ms / 256 | `ConnectorConfigFactory` |
 | state 디렉터리 | `./data/kafka-streams` (`KAFKA_STATE_DIR`), 섀도는 `{stateDir}/shadow-{view}-v{N}` | `StreamsConfigFactory`, `KafkaShadowBuilder` |
 | 재구축 작업 스레드 | 1 (daemon, `rebuild-worker`) | `RebuildService` |
+| 뷰 정의 디렉터리 | `views` (`CDCVIEW_VIEWS_DIR`). 예시 뷰는 `examples/ticket-fraud-views` | `application.yml` `views.directory`, `ViewsProperties` |
+| count_distinct 상태 크기 | 고유 값 수에 비례 (상한 없음) | `AggregateState.distincts` |
 | 따라잡기 폴링 | 500ms × 최대 600회 (약 5분) | `RebuildService` |
 | PG 커넥션 풀 | 최대 4 (`cdcview-source`), 부팅 시 연결 검증 생략 | `DataSourceConfig` |
 | 토픽 선생성 타임아웃 | 30초 | `CdcTopicProvisioner` |
@@ -585,12 +682,18 @@ on record(ts):
 | `decimal.handling.mode=double` | 정밀 decimal | 파서와 집계를 단순화. 검증은 `1e-6` 허용 오차로 비교 |
 | ETag = 뷰 버전 + 마지막 반영 LSN | 응답 해시 | 값이 바뀌면 LSN이 바뀌고, 재구축 교체 시 버전이 바뀌어 캐시가 자연 무효화 |
 | 검증은 non-quiesced면 판정하지 않음 | 항상 판정 | 흐르는 중 비교는 거짓 불일치를 만듦 |
+| count_distinct를 값별 행 수 맵으로 유지 | 값 집합만 저장, 근사 알고리즘 | 행 수를 세야 UPDATE와 DELETE를 정확히 되돌릴 수 있음. 대가로 저장 공간이 고유 값 수에 비례 |
+| 제공할 수 없는 피처를 에러가 아닌 `missing`으로 응답 | 404/400 에러 | 판정 엔진이 해당 룰만 건너뛸 수 있음 |
+| 피처 값은 지금을 포함한 윈도우 중 가장 오래된 것에서 읽음 | 가장 최근 윈도우 | 최근 구간을 가장 많이 덮음. sliding 정밀도는 advance 단위 |
+| 빈 구간에서 count/count_distinct/sum은 0, min/max/avg는 값 없음 | 모두 `missing` | 합계와 개수는 0이 맞지만 min/max/avg는 정의되지 않음 |
+| 피처를 뷰 YAML의 `features` 선언으로 노출하고 부팅 시 검증 | 요청 시 뷰/필드를 동적으로 해석 | 잘못된 선언(없는 필드, 윈도우 불일치)을 부팅 시점에 파일명 + 필드 경로로 드러냄 |
 
 ## 5. 오류 처리와 엣지 케이스
 
 | 상황 | 동작 |
 |---|---|
 | 뷰 YAML에 필수 필드 누락, 알 수 없는 필드, 잘못된 기간 형식, sliding에 `advance` 없음, 뷰 이름/결과 필드명 중복 | `ViewDefinitionException`(파일명 + 필드 경로)으로 부팅 실패. `ViewDefinitionFailureAnalyzer`가 원인과 조치 출력 |
+| `features`가 목록이 아님, 피처 하위 필드 누락, 비윈도우 뷰에 피처 선언, 피처 `window`가 `window.size`와 다름, 없는 집계 필드 참조 | `ViewDefinitionException`(`features`, `features[i].window`, `features[i].field` 등 경로)으로 부팅 실패 |
 | 대상 테이블이 `REPLICA IDENTITY FULL`이 아니거나 없음 | 커넥터 등록 전 테이블명 + `relreplident` 포함 예외로 부팅 실패 |
 | 클린 기동이라 CDC 토픽이 아직 없음 | 기동 전 선생성. 이미 있거나 생성 경합(`TopicExistsException`)은 성공 처리. 그 외 실패는 부팅 중단 |
 | Streams 리밸런스 중 `MissingSourceTopicException` | 스레드 교체(`REPLACE_THREAD`) 후 재시도. 그 외 예외는 클라이언트 종료 |
@@ -615,6 +718,12 @@ on record(ts):
 | lag 조회 실패 | 검증은 non-quiesced로, 섀도는 미완으로 처리 |
 | 부팅 시 PG 미가용 | `initializationFailTimeout=-1`로 컨텍스트는 뜸. 실제 쿼리 시점에 실패 |
 | 그룹 키가 바뀌는 UPDATE | 지원하지 않음 (범위 외) |
+| count_distinct 대상 값이 NULL | 세지 않음 |
+| count_distinct에서 같은 값의 행이 남은 상태로 DELETE | 고유 값 수 유지. 마지막 행이 지워질 때 감소 |
+| 피처 조회: 선언되지 않은 피처 | 200, `missing`에 참조 키 |
+| 피처 조회: 구간에 행 없음 | count/count_distinct/sum은 0, min/max/avg는 `missing` |
+| 피처 조회: 잘못된 `subjectType`, 빈 `subjectKey`, `features` 없음 | 400 |
+| 피처 조회: Streams가 RUNNING이 아님 | 503 |
 
 ## 6. 요구사항-설계 추적
 
@@ -630,6 +739,9 @@ on record(ts):
 | FR-8 | 3.6.3, 3.7 상태 동적 뷰, 3.8.6, `rebuild/RebuildService`, `rebuild/KafkaShadowBuilder`, `rebuild/ColumnChecker`, `rebuild/JdbcRebuildStateStore` |
 | FR-9 | 3.5.2 지표 (`view.apply.latency`), `cdc/CdcMetrics`, `bench/run-bench.sh` |
 | FR-10 | 3.1 컨텍스트 뷰, `docker-compose.yml`, `simulator`, `scripts/demo-check.sh` |
+| FR-11 | 3.5.1 REST API, 3.6.4 피처 조회, 3.8.7 피처 값 읽기, `api/FeatureQueryController`, `api/FeatureQueryService`, `api/dto`, `api/ApiExceptionHandler` |
+| FR-12 | 3.4.2 state store (`distincts`), 3.8.2 증분 집계, 3.8.5 정합성 검증, `topology/AggregateState`, `verify/ExpectedViewSqlGenerator` |
+| FR-13 | 3.3 논리 뷰 (`Feature`), 3.4.5 뷰 정의 YAML, `config/ViewDefinition`, `config/ViewDefinitionLoader`, `config/Durations`, `examples/ticket-fraud-views/` |
 | NFR-1, NFR-2 | 3.9 자원 뷰 (파티션, 스레드, poll 설정), 4 설계 근거 (T1, T2) |
 | NFR-3, NFR-4 | `docker-compose.yml`, `cdc/CdcTopicProvisioner`, `config/ViewDefinitionLoader` |
 | NFR-5, NFR-6 | 3.8.1 LSN 가드, `topology/StreamsConfigFactory` |
