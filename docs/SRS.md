@@ -378,7 +378,7 @@ ID 규칙: `FR-n`은 요구사항, `FR-n.m`은 그 수용 기준입니다. 출�
 | 시연 (성능) | 10,000 events/sec, 10분, 워밍업 60초 제외. 리포트는 `bench/reports/` | `bash bench/run-bench.sh` |
 | 검사 | 설정 파일, 코드 확인 | - |
 
-마지막 로컬 테스트 결과(`engine/build/test-results/test`): 18개 클래스, 64개 테스트, 59 통과, 5 skip(`ReplicaIdentityCheckerIT` 2, `JdbcRebuildStateStoreIT` 3), 0 실패. 이 결과는 커밋 `2d68c7f` 이전 실행이라 그 커밋에서 추가된 `api/FeatureQueryApiTest`(7개)와 `topology/CountDistinctTest`(7개)는 포함되어 있지 않습니다. CI(`.github/workflows/ci.yml`)는 push(master)와 pull request마다 `./gradlew test`를 실행합니다.
+마지막 로컬 테스트 결과(`engine/build/test-results/test`): 18개 클래스, 64개 테스트, 59 통과, 5 skip(`ReplicaIdentityCheckerIT` 2, `JdbcRebuildStateStoreIT` 3), 0 실패. 이 결과는 커밋 `2d68c7f` 이전 실행이라, 그 커밋에서 추가된 두 클래스는 2026-11-18에 Linux 컨테이너(JDK 21)에서 따로 실행했습니다: `api/FeatureQueryApiTest` 7개 통과, `topology/CountDistinctTest` 7개 통과, 0 실패. CI(`.github/workflows/ci.yml`)는 push(master)와 pull request마다 `./gradlew test`를 실행합니다.
 
 ### 4.2 요구사항 추적표
 
